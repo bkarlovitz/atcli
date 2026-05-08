@@ -67,6 +67,9 @@ func runAuth(cmd *cobra.Command, _ []string) error {
 	}
 
 	if err := auth.StoreToken(token); err != nil {
+		if errors.Is(err, auth.ErrCredentialStoreUnavailable) {
+			return errors.New("could not write to the OS credential store; unlock it or set ATTIO_ACCESS_TOKEN for shell-based auth")
+		}
 		return err
 	}
 

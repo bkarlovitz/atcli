@@ -20,7 +20,7 @@ var ErrCredentialStoreUnavailable = errors.New("credential store unavailable")
 
 func StoreToken(token string) error {
 	if err := keyring.Set(keyringService, keyringUser, token); err != nil {
-		return fmt.Errorf("store token in OS credential store: %w", err)
+		return fmt.Errorf("%w: %v", ErrCredentialStoreUnavailable, err)
 	}
 	return nil
 }

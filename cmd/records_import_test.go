@@ -859,6 +859,227 @@ func TestRecordsImportMetadataPermissionFallback(t *testing.T) {
 	assertContains(t, output, "valid")
 }
 
+func TestRecordsImportApplyWritesRecordThenListEntry(t *testing.T) {
+	csvPath := writeImportCSV(t, "record-entry.csv", "email_addresses,name,stage\nada@example.com,Ada Lovelace,Qualified\n")
+	recordWritten := false
+	entryWritten := false
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"id":{"object_id":"object-people"},"api_slug":"people","singular_noun":"Person","plural_noun":"People"}]}`))
+			return
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","is_writable":true,"is_unique":true},{"api_slug":"name","is_writable":true}]}`))
+			return
+		case "/lists":
+			_, _ = w.Write([]byte(`{"data":[{"id":{"list_id":"list-sales"},"api_slug":"sales","name":"Sales Pipeline","parent_object":["people"]}]}`))
+			return
+		case "/lists/sales/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"stage","is_writable":true}]}`))
+			return
+		case "/objects/people/records":
+			recordWritten = true
+			if r.Method != http.MethodPut {
+				t.Fatalf("expected record upsert PUT, got %s", r.Method)
+			}
+			var payload struct {
+				Data struct {
+					Values map[string]any `json:"values"`
+				} `json:"data"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode record request: %v", err)
+			}
+			if _, hasStage := payload.Data.Values["stage"]; hasStage {
+				t.Fatalf("entry-mapped stage should not be sent as a record value: %#v", payload.Data.Values)
+			}
+			_, _ = w.Write([]byte(`{"data":{"id":{"record_id":"record-ada"},"status":"updated","created":false}}`))
+			return
+		case "/lists/sales/entries":
+			entryWritten = true
+			if r.Method != http.MethodPut {
+				t.Fatalf("expected default list upsert PUT, got %s", r.Method)
+			}
+			var payload struct {
+				Data struct {
+					ParentRecordID string         `json:"parent_record_id"`
+					ParentObject   string         `json:"parent_object"`
+					EntryValues    map[string]any `json:"entry_values"`
+				} `json:"data"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode entry request: %v", err)
+			}
+			if payload.Data.ParentRecordID != "record-ada" || payload.Data.ParentObject != "people" {
+				t.Fatalf("unexpected entry parent payload: %#v", payload.Data)
+			}
+			if payload.Data.EntryValues["stage"] != "Qualified" {
+				t.Fatalf("unexpected entry values: %#v", payload.Data.EntryValues)
+			}
+			_, _ = w.Write([]byte(`{"data":{"id":{"entry_id":"entry-sales"},"parent_record_id":"record-ada","parent_object":"people","created":true}}`))
+			return
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--list", "sales", "--entry-map", "stage=stage", "--apply")
+	if err != nil {
+		t.Fatalf("expected no error, got %v\n%s", err, output)
+	}
+	if !recordWritten || !entryWritten {
+		t.Fatalf("expected record and entry writes, record=%v entry=%v", recordWritten, entryWritten)
+	}
+	assertContains(t, output, "List: sales")
+	assertContains(t, output, "record-ada")
+	assertContains(t, output, "entry-sales")
+	assertContains(t, output, "ENTRY STATUS")
+}
+
+func TestRecordsImportListParentObjectMismatch(t *testing.T) {
+	csvPath := writeImportCSV(t, "entry-mismatch.csv", "email_addresses,name,stage\nada@example.com,Ada Lovelace,Qualified\n")
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"id":{"object_id":"object-people"},"api_slug":"people"},{"id":{"object_id":"object-companies"},"api_slug":"companies"}]}`))
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","is_writable":true,"is_unique":true},{"api_slug":"name","is_writable":true}]}`))
+		case "/lists":
+			_, _ = w.Write([]byte(`{"data":[{"id":{"list_id":"list-sales"},"api_slug":"sales","name":"Sales Pipeline","parent_object":["companies"]}]}`))
+		case "/lists/sales/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"stage","is_writable":true}]}`))
+		case "/objects/people/records", "/lists/sales/entries":
+			t.Fatalf("write endpoint should not be called after list parent mismatch")
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+	}))
+
+	_, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--list", "sales", "--entry-map", "stage=stage")
+	if err == nil {
+		t.Fatal("expected list parent object mismatch error")
+	}
+	assertErrorContains(t, err, `list "sales" accepts parent object "companies"; got import object "people"`)
+}
+
+func TestRecordsImportListEntryMissingRecordIDResponse(t *testing.T) {
+	csvPath := writeImportCSV(t, "missing-record-id-entry.csv", "email_addresses,name,stage\nada@example.com,Ada Lovelace,Qualified\n")
+	entryCalled := false
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"people"}]}`))
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","is_writable":true,"is_unique":true},{"api_slug":"name","is_writable":true}]}`))
+		case "/lists":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"sales","parent_object":["people"]}]}`))
+		case "/lists/sales/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"stage","is_writable":true}]}`))
+		case "/objects/people/records":
+			_, _ = w.Write([]byte(`{"data":{"status":"updated","created":false}}`))
+		case "/lists/sales/entries":
+			entryCalled = true
+			t.Fatalf("entry endpoint should not be called without a record ID")
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--list", "sales", "--entry-map", "stage=stage", "--apply")
+	if err == nil {
+		t.Fatalf("expected apply failure, got nil\n%s", output)
+	}
+	if entryCalled {
+		t.Fatal("entry endpoint was called")
+	}
+	assertContains(t, output, "list-entry write skipped")
+	assertContains(t, output, "failed")
+}
+
+func TestRecordsImportListMetadataFallback(t *testing.T) {
+	csvPath := writeImportCSV(t, "entry-fallback.csv", "email_addresses,name,stage\nada@example.com,Ada Lovelace,Qualified\n")
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"people"}]}`))
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","is_writable":true,"is_unique":true},{"api_slug":"name","is_writable":true}]}`))
+		case "/lists":
+			http.Error(w, `{"error":"missing list_configuration:read"}`, http.StatusForbidden)
+		case "/objects/people/records", "/lists/sales/entries":
+			t.Fatalf("write endpoint should not be called in import dry-run")
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--list", "sales", "--entry-map", "stage=stage")
+	if err != nil {
+		t.Fatalf("expected metadata fallback plan, got %v\n%s", err, output)
+	}
+	assertContains(t, output, "List metadata unavailable")
+	assertContains(t, output, "valid")
+	assertContains(t, output, "ENTRY VALUES")
+	assertContains(t, output, "Qualified")
+}
+
+func TestRecordsImportListEntryPayloadConstruction(t *testing.T) {
+	csvPath := writeImportCSV(t, "entry-payload.csv", "email_addresses,name,pipeline_stage\nada@example.com,Ada Lovelace,Qualified\n")
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"people"}]}`))
+			return
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","is_writable":true,"is_unique":true},{"api_slug":"name","is_writable":true}]}`))
+			return
+		case "/lists":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"sales","parent_object":["people"]}]}`))
+			return
+		case "/lists/sales/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"stage","is_writable":true},{"api_slug":"source","is_writable":true}]}`))
+			return
+		case "/objects/people/records":
+			_, _ = w.Write([]byte(`{"data":{"id":{"record_id":"record-ada"},"status":"updated","created":false}}`))
+			return
+		case "/lists/sales/entries":
+			if r.Method != http.MethodPost {
+				t.Fatalf("expected list create POST, got %s", r.Method)
+			}
+			var payload struct {
+				Data struct {
+					ParentRecordID string         `json:"parent_record_id"`
+					ParentObject   string         `json:"parent_object"`
+					EntryValues    map[string]any `json:"entry_values"`
+				} `json:"data"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode entry request: %v", err)
+			}
+			if payload.Data.ParentRecordID != "record-ada" || payload.Data.ParentObject != "people" {
+				t.Fatalf("unexpected entry parent: %#v", payload.Data)
+			}
+			if payload.Data.EntryValues["stage"] != "Qualified" || payload.Data.EntryValues["source"] != "csv" {
+				t.Fatalf("unexpected entry values: %#v", payload.Data.EntryValues)
+			}
+			if _, exists := payload.Data.EntryValues["pipeline_stage"]; exists {
+				t.Fatalf("expected mapped entry attribute, got raw CSV column: %#v", payload.Data.EntryValues)
+			}
+			_, _ = w.Write([]byte(`{"data":{"id":{"entry_id":"entry-sales"},"parent_record_id":"record-ada","parent_object":"people","status":"created","created":true}}`))
+			return
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--list", "sales", "--list-mode", "create", "--entry-map", "pipeline_stage=stage", "--entry-set", "source=csv", "--apply")
+	if err != nil {
+		t.Fatalf("expected no error, got %v\n%s", err, output)
+	}
+	assertContains(t, output, "List mode: create")
+	assertContains(t, output, "entry-sales")
+}
+
 func TestRecordsImportHelp(t *testing.T) {
 	output, err := executeTestCommand(t, newRecordsCommand(), "import", "--help")
 	if err != nil {
@@ -874,6 +1095,10 @@ func TestRecordsImportHelp(t *testing.T) {
 		"--errors",
 		"--set",
 		"--set-json",
+		"--list",
+		"--list-mode",
+		"--entry-map",
+		"--entry-set",
 		"--mode",
 		"--output",
 		"--match",

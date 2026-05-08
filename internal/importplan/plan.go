@@ -21,6 +21,11 @@ type ImportPlanOptions struct {
 	MetadataAvailable bool
 	MultiSeparator    string
 	Warnings          []string
+	ListIdentifier    string
+	ListMode          string
+	EntryMapping      *MappingPlan
+	EntryAttributes   []attio.Attribute
+	EntryMetadata     bool
 }
 
 type ImportPlan struct {
@@ -31,21 +36,29 @@ type ImportPlan struct {
 	MetadataAvailable bool
 	Warnings          []string
 	Rows              []PlannedRow
+	ListIdentifier    string
+	ListMode          string
+	EntryMetadata     bool
 }
 
 type PlannedRow struct {
-	RowNumber    int
-	Mode         string
-	Values       map[string]any
-	SkippedEmpty []SkippedValue
-	Warnings     []string
-	Errors       []string
-	Valid        bool
+	RowNumber         int
+	Mode              string
+	Values            map[string]any
+	EntryValues       map[string]any
+	SkippedEmpty      []SkippedValue
+	EntrySkippedEmpty []SkippedValue
+	Warnings          []string
+	Errors            []string
+	Valid             bool
 }
 
 func BuildImportPlan(document *CSVDocument, mapping *MappingPlan, opts ImportPlanOptions) (*ImportPlan, error) {
 	if opts.Mode != ModeCreate && opts.Mode != ModeUpsert {
 		return nil, fmt.Errorf("unsupported import mode %q; use create or upsert", opts.Mode)
+	}
+	if opts.ListIdentifier != "" && opts.ListMode != ModeCreate && opts.ListMode != ModeUpsert {
+		return nil, fmt.Errorf("unsupported list import mode %q; use create or upsert", opts.ListMode)
 	}
 
 	attributes := attributeLookup(opts.Attributes)
@@ -64,6 +77,17 @@ func BuildImportPlan(document *CSVDocument, mapping *MappingPlan, opts ImportPla
 		}
 	}
 
+	entryMapping := opts.EntryMapping
+	if opts.ListIdentifier != "" && entryMapping == nil {
+		entryMapping = &MappingPlan{}
+	}
+	entryAttributes := attributeLookup(opts.EntryAttributes)
+	if opts.ListIdentifier != "" && opts.EntryMetadata {
+		if err := validatePlanAttributes(entryMapping, entryAttributes); err != nil {
+			return nil, fmt.Errorf("list entry: %w", err)
+		}
+	}
+
 	plan := &ImportPlan{
 		ObjectIdentifier:  opts.ObjectIdentifier,
 		Mode:              opts.Mode,
@@ -71,6 +95,9 @@ func BuildImportPlan(document *CSVDocument, mapping *MappingPlan, opts ImportPla
 		MatchDefaulted:    opts.MatchDefaulted,
 		MetadataAvailable: opts.MetadataAvailable,
 		Warnings:          append([]string(nil), opts.Warnings...),
+		ListIdentifier:    opts.ListIdentifier,
+		ListMode:          opts.ListMode,
+		EntryMetadata:     opts.EntryMetadata,
 	}
 
 	for _, row := range document.Rows {
@@ -102,11 +129,37 @@ func BuildImportPlan(document *CSVDocument, mapping *MappingPlan, opts ImportPla
 				}
 			}
 		}
+		if opts.ListIdentifier != "" {
+			entryPrepared, err := PrepareRow(row, entryMapping, ValuePreparationOptions{
+				Attributes:     opts.EntryAttributes,
+				MultiSeparator: opts.MultiSeparator,
+			})
+			if err != nil {
+				planned.Errors = append(planned.Errors, fmt.Sprintf("list entry: %s", err.Error()))
+			} else {
+				planned.EntryValues = entryPrepared.Values
+				planned.EntrySkippedEmpty = entryPrepared.SkippedEmpty
+				if opts.EntryMetadata {
+					planned.Errors = append(planned.Errors, prefixValidationErrors("list entry", validateRowRequiredValues(entryPrepared.Values, opts.EntryAttributes))...)
+				}
+			}
+		}
 		planned.Valid = len(planned.Errors) == 0
 		plan.Rows = append(plan.Rows, planned)
 	}
 
 	return plan, nil
+}
+
+func prefixValidationErrors(prefix string, errors []string) []string {
+	if len(errors) == 0 {
+		return nil
+	}
+	prefixed := make([]string, 0, len(errors))
+	for _, err := range errors {
+		prefixed = append(prefixed, prefix+": "+err)
+	}
+	return prefixed
 }
 
 func validatePlanAttributes(mapping *MappingPlan, attributes map[string]attio.Attribute) error {

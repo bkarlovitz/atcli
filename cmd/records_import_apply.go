@@ -29,6 +29,8 @@ type importApplyResult struct {
 	ObjectIdentifier string
 	Mode             string
 	MatchAttribute   string
+	ListIdentifier   string
+	ListMode         string
 	Rows             []importApplyRowResult
 	Planned          int
 	Succeeded        int
@@ -40,16 +42,25 @@ type importApplyResult struct {
 }
 
 type importApplyRowResult struct {
-	RowNumber           int
-	Mode                string
-	Object              string
-	MatchingAttribute   string
-	RecordID            string
-	Status              string
-	Outcome             string
-	Created             *bool
-	WriteEndpointCalled bool
-	Errors              []string
+	RowNumber                 int
+	Mode                      string
+	Object                    string
+	MatchingAttribute         string
+	RecordID                  string
+	Status                    string
+	RecordStatus              string
+	RecordOutcome             string
+	RecordCreated             *bool
+	RecordWriteEndpointCalled bool
+	List                      string
+	ListMode                  string
+	EntryID                   string
+	EntryStatus               string
+	EntryOutcome              string
+	EntryCreated              *bool
+	EntryWriteEndpointCalled  bool
+	WriteEndpointCalled       bool
+	Errors                    []string
 }
 
 func executeImportPlan(ctx context.Context, client *attio.Client, plan *importplan.ImportPlan, opts importExecutionOptions) importApplyResult {
@@ -58,6 +69,8 @@ func executeImportPlan(ctx context.Context, client *attio.Client, plan *importpl
 		ObjectIdentifier: plan.ObjectIdentifier,
 		Mode:             plan.Mode,
 		MatchAttribute:   plan.MatchAttribute,
+		ListIdentifier:   plan.ListIdentifier,
+		ListMode:         plan.ListMode,
 		Planned:          len(plan.Rows),
 		Rows:             make([]importApplyRowResult, 0, len(plan.Rows)),
 	}
@@ -68,10 +81,16 @@ func executeImportPlan(ctx context.Context, client *attio.Client, plan *importpl
 			Mode:              row.Mode,
 			Object:            plan.ObjectIdentifier,
 			MatchingAttribute: plan.MatchAttribute,
+			List:              plan.ListIdentifier,
+			ListMode:          plan.ListMode,
 		}
 
 		if !row.Valid {
 			rowResult.Status = "failed"
+			rowResult.RecordStatus = "failed"
+			if plan.ListIdentifier != "" {
+				rowResult.EntryStatus = "skipped"
+			}
 			rowResult.Errors = sanitizeImportErrors(row.Errors)
 			result.recordRow(rowResult)
 			if !opts.ContinueOnError {
@@ -82,9 +101,14 @@ func executeImportPlan(ctx context.Context, client *attio.Client, plan *importpl
 		}
 
 		rowResult.WriteEndpointCalled = true
+		rowResult.RecordWriteEndpointCalled = true
 		record, outcome, created, err := executeImportRow(ctx, client, plan, row)
 		if err != nil {
 			rowResult.Status = "failed"
+			rowResult.RecordStatus = "failed"
+			if plan.ListIdentifier != "" {
+				rowResult.EntryStatus = "skipped"
+			}
 			rowResult.Errors = []string{sanitizeImportErrorText(classifyRecordWriteError(fmt.Sprintf("import row %d", row.RowNumber), err).Error())}
 			result.recordRow(rowResult)
 			if !opts.ContinueOnError {
@@ -95,14 +119,96 @@ func executeImportPlan(ctx context.Context, client *attio.Client, plan *importpl
 		}
 
 		rowResult.RecordID = record.ID.RecordID
-		rowResult.Outcome = outcome
-		rowResult.Created = created
-		rowResult.Status = importApplySuccessStatus(outcome, created)
+		rowResult.RecordOutcome = outcome
+		rowResult.RecordCreated = created
+		rowResult.RecordStatus = importApplySuccessStatus(outcome, created)
+		rowResult.Status = rowResult.RecordStatus
+		if plan.ListIdentifier == "" {
+			result.recordRow(rowResult)
+			continue
+		}
+		if rowResult.RecordID == "" {
+			rowResult.Status = "failed"
+			rowResult.EntryStatus = "failed"
+			rowResult.Errors = []string{"record write succeeded but Attio response did not include a record ID; list-entry write skipped"}
+			result.recordRow(rowResult)
+			if !opts.ContinueOnError {
+				result.recordSkippedRows(plan, i+1, row.RowNumber)
+				break
+			}
+			continue
+		}
+
+		rowResult.EntryWriteEndpointCalled = true
+		entryResult, err := executeImportEntry(ctx, client, plan, row, rowResult.RecordID)
+		if err != nil {
+			rowResult.Status = "failed"
+			rowResult.EntryStatus = "failed"
+			rowResult.Errors = []string{sanitizeImportErrorText(classifyEntryWriteError(fmt.Sprintf("import row %d list entry", row.RowNumber), err).Error())}
+			result.recordRow(rowResult)
+			if !opts.ContinueOnError {
+				result.recordSkippedRows(plan, i+1, row.RowNumber)
+				break
+			}
+			continue
+		}
+
+		rowResult.EntryID = entryResult.Entry.ID.EntryID
+		rowResult.EntryOutcome = entryResult.Outcome
+		rowResult.EntryCreated = entryResult.Created
+		rowResult.EntryStatus = importApplySuccessStatus(entryResult.Outcome, entryResult.Created)
 		result.recordRow(rowResult)
 	}
 
 	result.Elapsed = time.Since(started)
 	return result
+}
+
+func executeImportEntry(ctx context.Context, client *attio.Client, plan *importplan.ImportPlan, row importplan.PlannedRow, parentRecordID string) (*attio.ListEntryResult, error) {
+	var lastErr error
+	rateLimited := false
+	for attempt := 0; attempt <= maxImportRateLimitRetries; attempt++ {
+		entry, err := executeImportEntryOnce(ctx, client, plan, row, parentRecordID)
+		if err == nil {
+			return entry, nil
+		}
+		lastErr = err
+
+		delay, retryable := importRateLimitDelay(err, attempt)
+		if !retryable {
+			return nil, lastErr
+		}
+		rateLimited = true
+		if attempt == maxImportRateLimitRetries {
+			break
+		}
+		if err := importRateLimitSleep(ctx, delay); err != nil {
+			return nil, err
+		}
+	}
+	if !rateLimited {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("rate limit retry attempts exhausted: %w", lastErr)
+}
+
+func executeImportEntryOnce(ctx context.Context, client *attio.Client, plan *importplan.ImportPlan, row importplan.PlannedRow, parentRecordID string) (*attio.ListEntryResult, error) {
+	rowCtx, cancel := context.WithTimeout(ctx, importRowWriteTimeout)
+	defer cancel()
+
+	write := attio.ListEntryWrite{
+		ParentRecordID: parentRecordID,
+		ParentObject:   plan.ObjectIdentifier,
+		EntryValues:    nonNilValues(row.EntryValues),
+	}
+	switch plan.ListMode {
+	case importplan.ModeCreate:
+		return client.CreateListEntry(rowCtx, plan.ListIdentifier, write)
+	case importplan.ModeUpsert:
+		return client.AssertListEntry(rowCtx, plan.ListIdentifier, write)
+	default:
+		return nil, fmt.Errorf("unsupported list import mode %q", plan.ListMode)
+	}
 }
 
 func executeImportRow(ctx context.Context, client *attio.Client, plan *importplan.ImportPlan, row importplan.PlannedRow) (attio.Record, string, *bool, error) {
@@ -209,14 +315,21 @@ func (r *importApplyResult) recordRow(row importApplyRowResult) {
 
 func (r *importApplyResult) recordSkippedRows(plan *importplan.ImportPlan, start int, failedRowNumber int) {
 	for _, row := range plan.Rows[start:] {
-		r.recordRow(importApplyRowResult{
+		rowResult := importApplyRowResult{
 			RowNumber:         row.RowNumber,
 			Mode:              row.Mode,
 			Object:            plan.ObjectIdentifier,
 			MatchingAttribute: plan.MatchAttribute,
 			Status:            "skipped",
+			RecordStatus:      "skipped",
+			List:              plan.ListIdentifier,
+			ListMode:          plan.ListMode,
 			Errors:            []string{fmt.Sprintf("skipped after row %d failed", failedRowNumber)},
-		})
+		}
+		if plan.ListIdentifier != "" {
+			rowResult.EntryStatus = "skipped"
+		}
+		r.recordRow(rowResult)
 	}
 }
 
@@ -261,6 +374,14 @@ func printImportApplyTable(out io.Writer, result importApplyResult) error {
 			return err
 		}
 	}
+	if result.ListIdentifier != "" {
+		if _, err := fmt.Fprintf(out, "List: %s\n", result.ListIdentifier); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(out, "List mode: %s\n", result.ListMode); err != nil {
+			return err
+		}
+	}
 	if _, err := fmt.Fprintf(
 		out,
 		"Rows: %d planned, %d succeeded, %d failed, %d skipped, %d created, %d updated\n",
@@ -278,16 +399,38 @@ func printImportApplyTable(out io.Writer, result importApplyResult) error {
 	}
 
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(w, "ROW\tSTATUS\tRECORD ID\tERRORS"); err != nil {
+	if result.ListIdentifier == "" {
+		if _, err := fmt.Fprintln(w, "ROW\tSTATUS\tRECORD ID\tERRORS"); err != nil {
+			return err
+		}
+		for _, row := range result.Rows {
+			if _, err := fmt.Fprintf(
+				w,
+				"%d\t%s\t%s\t%s\n",
+				row.RowNumber,
+				row.Status,
+				row.RecordID,
+				strings.Join(row.Errors, "; "),
+			); err != nil {
+				return err
+			}
+		}
+		return w.Flush()
+	}
+
+	if _, err := fmt.Fprintln(w, "ROW\tSTATUS\tRECORD STATUS\tENTRY STATUS\tRECORD ID\tENTRY ID\tERRORS"); err != nil {
 		return err
 	}
 	for _, row := range result.Rows {
 		if _, err := fmt.Fprintf(
 			w,
-			"%d\t%s\t%s\t%s\n",
+			"%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			row.RowNumber,
 			row.Status,
+			row.RecordStatus,
+			row.EntryStatus,
 			row.RecordID,
+			row.EntryID,
 			strings.Join(row.Errors, "; "),
 		); err != nil {
 			return err
@@ -305,11 +448,20 @@ func printImportApplyJSONL(out io.Writer, result importApplyResult) error {
 			Mode:                row.Mode,
 			Object:              row.Object,
 			MatchingAttribute:   row.MatchingAttribute,
+			List:                row.List,
+			ListMode:            row.ListMode,
 			RecordID:            row.RecordID,
 			Status:              row.Status,
-			Outcome:             row.Outcome,
-			Created:             row.Created,
+			RecordStatus:        row.RecordStatus,
+			RecordOutcome:       row.RecordOutcome,
+			RecordCreated:       row.RecordCreated,
+			EntryID:             row.EntryID,
+			EntryStatus:         row.EntryStatus,
+			EntryOutcome:        row.EntryOutcome,
+			EntryCreated:        row.EntryCreated,
 			WriteEndpointCalled: row.WriteEndpointCalled,
+			RecordWriteCalled:   row.RecordWriteEndpointCalled,
+			EntryWriteCalled:    row.EntryWriteEndpointCalled,
 			Errors:              row.Errors,
 		}
 		if err := encoder.Encode(event); err != nil {
@@ -321,6 +473,8 @@ func printImportApplyJSONL(out io.Writer, result importApplyResult) error {
 		Object:            result.ObjectIdentifier,
 		Mode:              result.Mode,
 		MatchingAttribute: result.MatchAttribute,
+		List:              result.ListIdentifier,
+		ListMode:          result.ListMode,
 		Planned:           result.Planned,
 		Succeeded:         result.Succeeded,
 		Failed:            result.Failed,
@@ -338,11 +492,20 @@ type importApplyRowEvent struct {
 	Mode                string   `json:"mode"`
 	Object              string   `json:"object"`
 	MatchingAttribute   string   `json:"matching_attribute,omitempty"`
+	List                string   `json:"list,omitempty"`
+	ListMode            string   `json:"list_mode,omitempty"`
 	RecordID            string   `json:"record_id,omitempty"`
 	Status              string   `json:"status"`
-	Outcome             string   `json:"outcome,omitempty"`
-	Created             *bool    `json:"created,omitempty"`
+	RecordStatus        string   `json:"record_status,omitempty"`
+	RecordOutcome       string   `json:"record_outcome,omitempty"`
+	RecordCreated       *bool    `json:"record_created,omitempty"`
+	EntryID             string   `json:"entry_id,omitempty"`
+	EntryStatus         string   `json:"entry_status,omitempty"`
+	EntryOutcome        string   `json:"entry_outcome,omitempty"`
+	EntryCreated        *bool    `json:"entry_created,omitempty"`
 	WriteEndpointCalled bool     `json:"write_endpoint_called"`
+	RecordWriteCalled   bool     `json:"record_write_endpoint_called,omitempty"`
+	EntryWriteCalled    bool     `json:"entry_write_endpoint_called,omitempty"`
 	Errors              []string `json:"errors,omitempty"`
 }
 
@@ -351,6 +514,8 @@ type importApplySummaryEvent struct {
 	Object            string                     `json:"object"`
 	Mode              string                     `json:"mode"`
 	MatchingAttribute string                     `json:"matching_attribute,omitempty"`
+	List              string                     `json:"list,omitempty"`
+	ListMode          string                     `json:"list_mode,omitempty"`
 	Planned           int                        `json:"planned"`
 	Succeeded         int                        `json:"succeeded"`
 	Failed            int                        `json:"failed"`

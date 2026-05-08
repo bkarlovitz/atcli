@@ -1,6 +1,7 @@
 package attio
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -82,12 +83,7 @@ func (c *Client) getJSON(ctx context.Context, path string, target any) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return &APIError{
-			StatusCode: resp.StatusCode,
-			Status:     resp.Status,
-			Body:       strings.TrimSpace(string(body)),
-		}
+		return c.apiError(resp)
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
@@ -95,4 +91,49 @@ func (c *Client) getJSON(ctx context.Context, path string, target any) error {
 	}
 
 	return nil
+}
+
+func (c *Client) postJSON(ctx context.Context, path string, payload, target any) error {
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(payload); err != nil {
+		return fmt.Errorf("encode request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, &body)
+	if err != nil {
+		return fmt.Errorf("create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return c.apiError(resp)
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(target); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+
+	return nil
+}
+
+func (c *Client) apiError(resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	bodyText := strings.TrimSpace(string(body))
+	if c.token != "" {
+		bodyText = strings.ReplaceAll(bodyText, c.token, "[redacted]")
+	}
+	return &APIError{
+		StatusCode: resp.StatusCode,
+		Status:     resp.Status,
+		Body:       bodyText,
+	}
 }

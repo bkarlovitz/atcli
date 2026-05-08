@@ -4,7 +4,7 @@
 After this sprint, a user can create a single Attio record from shell flags and preview the exact write payload before sending it.
 
 ## Tasks
-- [ ] **Task 2.1**: Add record create API support
+- [x] **Task 2.1**: Add record create API support
   - Add an `internal/attio` method for Attio's create record endpoint.
   - Return enough record identity data for command output, including object identifier and record ID when available.
   - Preserve useful API errors for permission, validation, and rate-limit responses without exposing tokens.

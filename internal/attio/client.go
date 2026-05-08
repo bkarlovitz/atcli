@@ -94,12 +94,20 @@ func (c *Client) getJSON(ctx context.Context, path string, target any) error {
 }
 
 func (c *Client) postJSON(ctx context.Context, path string, payload, target any) error {
+	return c.writeJSON(ctx, http.MethodPost, path, payload, target)
+}
+
+func (c *Client) putJSON(ctx context.Context, path string, payload, target any) error {
+	return c.writeJSON(ctx, http.MethodPut, path, payload, target)
+}
+
+func (c *Client) writeJSON(ctx context.Context, method, path string, payload, target any) error {
 	var body bytes.Buffer
 	if err := json.NewEncoder(&body).Encode(payload); err != nil {
 		return fmt.Errorf("encode request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, &body)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, &body)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}

@@ -78,6 +78,114 @@ func TestCreateRecordEscapesObjectIdentifier(t *testing.T) {
 	}
 }
 
+func TestAssertRecordSendsRequestAndDecodesResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Fatalf("expected PUT, got %s", r.Method)
+		}
+		if r.URL.EscapedPath() != "/objects/custom%20object/records" {
+			t.Fatalf("expected assert record path, got %s", r.URL.String())
+		}
+		if got := r.URL.Query().Get("matching_attribute"); got != "external id" {
+			t.Fatalf("expected matching_attribute query, got %q", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Fatalf("expected bearer token header, got %q", got)
+		}
+
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if _, ok := payload["matching_attribute"]; ok {
+			t.Fatalf("matching attribute should be in query, not body: %#v", payload)
+		}
+		data := payload["data"].(map[string]any)
+		values := data["values"].(map[string]any)
+		if values["external id"] != "ext-123" || values["name"] != "Ada Lovelace" {
+			t.Fatalf("unexpected values payload: %#v", values)
+		}
+
+		_, _ = w.Write([]byte(`{"data":{"id":{"workspace_id":"workspace-123","object_id":"object-123","record_id":"record-123"},"created_at":"2026-05-07T12:00:00Z","web_url":"https://app.attio.com/acme/person/record-123","values":{"name":"Ada Lovelace"},"status":"created","created":true}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient("test-token", WithBaseURL(server.URL), WithHTTPClient(server.Client()))
+	result, err := client.AssertRecord(context.Background(), "custom object", "external id", map[string]any{
+		"external id": "ext-123",
+		"name":        "Ada Lovelace",
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.Record.ID.WorkspaceID != "workspace-123" || result.Record.ID.ObjectID != "object-123" || result.Record.ID.RecordID != "record-123" {
+		t.Fatalf("unexpected record ID: %#v", result.Record.ID)
+	}
+	if result.Record.WebURL == "" || result.Record.Values["name"] != "Ada Lovelace" {
+		t.Fatalf("unexpected record decode: %#v", result.Record)
+	}
+	if result.Outcome != "created" {
+		t.Fatalf("expected created outcome, got %q", result.Outcome)
+	}
+	if result.Created == nil || !*result.Created {
+		t.Fatalf("expected created marker, got %#v", result.Created)
+	}
+}
+
+func TestAssertRecordReturnsUsefulAPIErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		wantBody   string
+	}{
+		{
+			name:       "validation",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":"matching_attribute must be unique"}`,
+			wantBody:   "matching_attribute must be unique",
+		},
+		{
+			name:       "permission",
+			statusCode: http.StatusForbidden,
+			body:       `{"error":"missing record_permission:read-write for test-token"}`,
+			wantBody:   "missing record_permission:read-write",
+		},
+		{
+			name:       "rate limit",
+			statusCode: http.StatusTooManyRequests,
+			body:       `{"error":"rate limit exceeded"}`,
+			wantBody:   "rate limit exceeded",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, tt.body, tt.statusCode)
+			}))
+			defer server.Close()
+
+			client := NewClient("test-token", WithBaseURL(server.URL), WithHTTPClient(server.Client()))
+			_, err := client.AssertRecord(context.Background(), "people", "email_addresses", map[string]any{"email_addresses": "ada@example.com"})
+
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("expected APIError, got %T: %v", err, err)
+			}
+			if apiErr.StatusCode != tt.statusCode {
+				t.Fatalf("expected status %d, got %d", tt.statusCode, apiErr.StatusCode)
+			}
+			if !strings.Contains(apiErr.Body, tt.wantBody) {
+				t.Fatalf("expected body to contain %q, got %q", tt.wantBody, apiErr.Body)
+			}
+			if strings.Contains(apiErr.Body, "test-token") || strings.Contains(apiErr.Error(), "test-token") {
+				t.Fatalf("expected token to be redacted, got %q", apiErr.Error())
+			}
+		})
+	}
+}
+
 func TestCreateRecordReturnsUsefulAPIErrors(t *testing.T) {
 	tests := []struct {
 		name       string

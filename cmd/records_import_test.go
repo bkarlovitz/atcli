@@ -1,12 +1,15 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRecordsImportPlansUpsertAndAvoidsWriteEndpoint(t *testing.T) {
@@ -139,6 +142,125 @@ func TestRecordsImportApplyUpsertModePropagatesIdentity(t *testing.T) {
 	assertContains(t, output, "Matching attribute: email_addresses")
 	assertContains(t, output, "record-person-1")
 	assertContains(t, output, "updated")
+}
+
+func TestRecordsImportApplyRetriesRateLimitWithRetryAfter(t *testing.T) {
+	sleeps := captureImportRateLimitSleeps(t)
+	csvPath := writeImportCSV(t, "retry-success.csv", "email_addresses,name\nada@example.com,Ada Lovelace\ncharles@example.com,Charles Babbage\n")
+	attemptsByEmail := map[string]int{}
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"people"}]}`))
+			return
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","type":"email-address","is_writable":true,"is_unique":true},{"api_slug":"name","type":"personal-name","is_writable":true}]}`))
+			return
+		case "/objects/people/records":
+			if r.Method != http.MethodPut {
+				t.Fatalf("expected PUT, got %s", r.Method)
+			}
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+
+		var payload struct {
+			Data struct {
+				Values map[string]any `json:"values"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		email, _ := payload.Data.Values["email_addresses"].(string)
+		attemptsByEmail[email]++
+		if email == "charles@example.com" && attemptsByEmail[email] == 1 {
+			w.Header().Set("Retry-After", "2")
+			http.Error(w, `{"error":"rate limited"}`, http.StatusTooManyRequests)
+			return
+		}
+		created := email == "charles@example.com"
+		status := "updated"
+		recordID := "record-ada"
+		if created {
+			status = "created"
+			recordID = "record-charles"
+		}
+		_, _ = fmt.Fprintf(w, `{"data":{"id":{"record_id":%q},"status":%q,"created":%t}}`, recordID, status, created)
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--apply")
+	if err != nil {
+		t.Fatalf("expected no error, got %v\n%s", err, output)
+	}
+	if attemptsByEmail["ada@example.com"] != 1 || attemptsByEmail["charles@example.com"] != 2 {
+		t.Fatalf("unexpected attempts by email: %#v", attemptsByEmail)
+	}
+	if len(*sleeps) != 1 || (*sleeps)[0] != 2*time.Second {
+		t.Fatalf("expected one Retry-After sleep of 2s, got %#v", *sleeps)
+	}
+	assertContains(t, output, "record-ada")
+	assertContains(t, output, "record-charles")
+	assertContains(t, output, "Rows: 2 (succeeded: 2, failed: 0, created: 1, updated: 1)")
+}
+
+func TestRecordsImportApplyRateLimitExhaustionReportsFailure(t *testing.T) {
+	sleeps := captureImportRateLimitSleeps(t)
+	csvPath := writeImportCSV(t, "retry-exhausted.csv", "email_addresses,name\nada@example.com,Ada Lovelace\ncharles@example.com,Charles Babbage\n")
+	attemptsByEmail := map[string]int{}
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"people"}]}`))
+			return
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","type":"email-address","is_writable":true,"is_unique":true},{"api_slug":"name","type":"personal-name","is_writable":true}]}`))
+			return
+		case "/objects/people/records":
+			if r.Method != http.MethodPut {
+				t.Fatalf("expected PUT, got %s", r.Method)
+			}
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+
+		var payload struct {
+			Data struct {
+				Values map[string]any `json:"values"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		email, _ := payload.Data.Values["email_addresses"].(string)
+		attemptsByEmail[email]++
+		if email == "charles@example.com" {
+			http.Error(w, `{"error":"still rate limited"}`, http.StatusTooManyRequests)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"id":{"record_id":"record-ada"},"status":"updated","created":false}}`))
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--apply")
+	if err == nil {
+		t.Fatalf("expected apply failure, got nil\n%s", output)
+	}
+	if attemptsByEmail["ada@example.com"] != 1 || attemptsByEmail["charles@example.com"] != maxImportRateLimitRetries+1 {
+		t.Fatalf("unexpected attempts by email: %#v", attemptsByEmail)
+	}
+	wantSleeps := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond}
+	if len(*sleeps) != len(wantSleeps) {
+		t.Fatalf("expected sleeps %#v, got %#v", wantSleeps, *sleeps)
+	}
+	for i, want := range wantSleeps {
+		if (*sleeps)[i] != want {
+			t.Fatalf("expected sleep %d to be %s, got %s", i, want, (*sleeps)[i])
+		}
+	}
+	assertContains(t, output, "record-ada")
+	assertContains(t, output, "failed")
+	assertContains(t, output, "rate limit")
+	assertContains(t, output, "Rows: 2 (succeeded: 1, failed: 1, created: 0, updated: 1)")
 }
 
 func TestRecordsImportApplyReusesPlanValidationBeforeWrites(t *testing.T) {
@@ -418,4 +540,18 @@ func writeImportCSV(t *testing.T, name, contents string) string {
 		t.Fatalf("write import CSV fixture: %v", err)
 	}
 	return path
+}
+
+func captureImportRateLimitSleeps(t *testing.T) *[]time.Duration {
+	t.Helper()
+	sleeps := make([]time.Duration, 0)
+	oldSleep := importRateLimitSleep
+	importRateLimitSleep = func(_ context.Context, delay time.Duration) error {
+		sleeps = append(sleeps, delay)
+		return nil
+	}
+	t.Cleanup(func() {
+		importRateLimitSleep = oldSleep
+	})
+	return &sleeps
 }

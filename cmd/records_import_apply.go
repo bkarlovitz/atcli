@@ -3,8 +3,10 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -14,6 +16,9 @@ import (
 )
 
 const importRowWriteTimeout = 15 * time.Second
+const maxImportRateLimitRetries = 3
+
+var importRateLimitSleep = sleepForImportRateLimit
 
 type importApplyResult struct {
 	ObjectIdentifier string
@@ -85,6 +90,34 @@ func executeImportPlan(ctx context.Context, client *attio.Client, plan *importpl
 }
 
 func executeImportRow(ctx context.Context, client *attio.Client, plan *importplan.ImportPlan, row importplan.PlannedRow) (attio.Record, string, *bool, error) {
+	var lastErr error
+	rateLimited := false
+	for attempt := 0; attempt <= maxImportRateLimitRetries; attempt++ {
+		record, outcome, created, err := executeImportRowOnce(ctx, client, plan, row)
+		if err == nil {
+			return record, outcome, created, nil
+		}
+		lastErr = err
+
+		delay, retryable := importRateLimitDelay(err, attempt)
+		if !retryable {
+			return attio.Record{}, "", nil, lastErr
+		}
+		rateLimited = true
+		if attempt == maxImportRateLimitRetries {
+			break
+		}
+		if err := importRateLimitSleep(ctx, delay); err != nil {
+			return attio.Record{}, "", nil, err
+		}
+	}
+	if !rateLimited {
+		return attio.Record{}, "", nil, lastErr
+	}
+	return attio.Record{}, "", nil, fmt.Errorf("rate limit retry attempts exhausted: %w", lastErr)
+}
+
+func executeImportRowOnce(ctx context.Context, client *attio.Client, plan *importplan.ImportPlan, row importplan.PlannedRow) (attio.Record, string, *bool, error) {
 	rowCtx, cancel := context.WithTimeout(ctx, importRowWriteTimeout)
 	defer cancel()
 
@@ -103,6 +136,40 @@ func executeImportRow(ctx context.Context, client *attio.Client, plan *importpla
 		return assertResult.Record, assertResult.Outcome, assertResult.Created, nil
 	default:
 		return attio.Record{}, "", nil, fmt.Errorf("unsupported import mode %q", plan.Mode)
+	}
+}
+
+func importRateLimitDelay(err error, attempt int) (time.Duration, bool) {
+	var apiErr *attio.APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusTooManyRequests {
+		return 0, false
+	}
+	if apiErr.HasRetryAfter {
+		return apiErr.RetryAfter, true
+	}
+
+	delay := 100 * time.Millisecond
+	for i := 0; i < attempt; i++ {
+		delay *= 2
+	}
+	if delay > 2*time.Second {
+		return 2 * time.Second, true
+	}
+	return delay, true
+}
+
+func sleepForImportRateLimit(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 

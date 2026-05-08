@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const defaultBaseURL = "https://api.attio.com/v2"
@@ -50,9 +51,11 @@ func NewClient(token string, opts ...ClientOption) *Client {
 }
 
 type APIError struct {
-	StatusCode int
-	Status     string
-	Body       string
+	StatusCode    int
+	Status        string
+	Body          string
+	RetryAfter    time.Duration
+	HasRetryAfter bool
 }
 
 func (e *APIError) Error() string {
@@ -139,9 +142,34 @@ func (c *Client) apiError(resp *http.Response) error {
 	if c.token != "" {
 		bodyText = strings.ReplaceAll(bodyText, c.token, "[redacted]")
 	}
+	retryAfter, hasRetryAfter := parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())
 	return &APIError{
-		StatusCode: resp.StatusCode,
-		Status:     resp.Status,
-		Body:       bodyText,
+		StatusCode:    resp.StatusCode,
+		Status:        resp.Status,
+		Body:          bodyText,
+		RetryAfter:    retryAfter,
+		HasRetryAfter: hasRetryAfter,
 	}
+}
+
+func parseRetryAfter(raw string, now time.Time) (time.Duration, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false
+	}
+	if seconds, err := time.ParseDuration(raw + "s"); err == nil {
+		if seconds < 0 {
+			return 0, true
+		}
+		return seconds, true
+	}
+	retryAt, err := http.ParseTime(raw)
+	if err != nil {
+		return 0, false
+	}
+	delay := retryAt.Sub(now)
+	if delay < 0 {
+		return 0, true
+	}
+	return delay, true
 }

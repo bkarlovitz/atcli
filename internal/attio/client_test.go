@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClientUsesCustomBaseURLAndHeaders(t *testing.T) {
@@ -55,5 +56,24 @@ func TestClientReturnsAPIError(t *testing.T) {
 	}
 	if !strings.Contains(apiErr.Body, "missing scope") {
 		t.Fatalf("expected error body to be preserved, got %q", apiErr.Body)
+	}
+}
+
+func TestClientAPIErrorCapturesRetryAfter(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "3")
+		http.Error(w, `{"error":"rate limited"}`, http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	client := NewClient("test-token", WithBaseURL(server.URL), WithHTTPClient(server.Client()))
+	_, err := client.ListObjects(context.Background())
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected APIError, got %T: %v", err, err)
+	}
+	if !apiErr.HasRetryAfter || apiErr.RetryAfter != 3*time.Second {
+		t.Fatalf("expected Retry-After of 3s, got has=%t delay=%s", apiErr.HasRetryAfter, apiErr.RetryAfter)
 	}
 }

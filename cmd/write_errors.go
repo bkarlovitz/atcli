@@ -44,6 +44,41 @@ func classifyRecordWriteError(action string, err error) error {
 	}
 }
 
+func classifyEntryWriteError(action string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if isTimeoutError(err) {
+		return fmt.Errorf("%s failed: network timeout while contacting Attio; retry the request or check connectivity: %w", action, err)
+	}
+
+	var apiErr *attio.APIError
+	if !errors.As(err, &apiErr) {
+		return fmt.Errorf("%s failed: %w", action, err)
+	}
+
+	body := strings.ToLower(apiErr.Body)
+	switch {
+	case apiErr.StatusCode == http.StatusTooManyRequests:
+		return fmt.Errorf("%s failed: Attio rate limit exceeded; retry after a short delay: %w", action, err)
+	case isListEntryScopeError(apiErr):
+		return fmt.Errorf("%s failed: token is missing Attio list entry write scope (list_entry:read-write): %w", action, err)
+	case isMultipleListEntryMatchError(apiErr):
+		return fmt.Errorf("%s failed: multiple list entries already match this parent record; resolve duplicates in Attio and retry: %w", action, err)
+	case isDuplicateListEntryError(apiErr):
+		return fmt.Errorf("%s failed: Attio reported a duplicate list entry or unique list-entry value conflict: %w", action, err)
+	case apiErr.StatusCode == http.StatusBadRequest || apiErr.StatusCode == http.StatusUnprocessableEntity:
+		return fmt.Errorf("%s failed: Attio rejected the list-entry values; check attribute names, parent record, and value shapes: %w", action, err)
+	case apiErr.StatusCode == http.StatusUnauthorized:
+		return fmt.Errorf("%s failed: Attio rejected the token; run `atcli auth` or set ATTIO_ACCESS_TOKEN: %w", action, err)
+	default:
+		if strings.Contains(body, "validation") {
+			return fmt.Errorf("%s failed: Attio rejected the list-entry values; check attribute names, parent record, and value shapes: %w", action, err)
+		}
+		return fmt.Errorf("%s failed: %w", action, err)
+	}
+}
+
 func isTimeoutError(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
@@ -68,4 +103,30 @@ func isNonUniqueMatchError(apiErr *attio.APIError) bool {
 	body := strings.ToLower(apiErr.Body)
 	return strings.Contains(body, "unique") &&
 		(strings.Contains(body, "matching_attribute") || strings.Contains(body, "matching attribute") || strings.Contains(body, "match"))
+}
+
+func isListEntryScopeError(apiErr *attio.APIError) bool {
+	if apiErr.StatusCode != http.StatusForbidden && apiErr.StatusCode != http.StatusUnauthorized {
+		return false
+	}
+	body := strings.ToLower(apiErr.Body)
+	return strings.Contains(body, "list_entry:read-write") ||
+		(strings.Contains(body, "list") && strings.Contains(body, "entry") && strings.Contains(body, "write") && strings.Contains(body, "scope"))
+}
+
+func isMultipleListEntryMatchError(apiErr *attio.APIError) bool {
+	if apiErr.StatusCode != http.StatusBadRequest && apiErr.StatusCode != http.StatusUnprocessableEntity && apiErr.StatusCode != http.StatusConflict {
+		return false
+	}
+	body := strings.ToLower(apiErr.Body)
+	return strings.Contains(body, "multiple_match_results") ||
+		(strings.Contains(body, "multiple") && strings.Contains(body, "match"))
+}
+
+func isDuplicateListEntryError(apiErr *attio.APIError) bool {
+	if apiErr.StatusCode != http.StatusBadRequest && apiErr.StatusCode != http.StatusUnprocessableEntity && apiErr.StatusCode != http.StatusConflict {
+		return false
+	}
+	body := strings.ToLower(apiErr.Body)
+	return strings.Contains(body, "duplicate") || strings.Contains(body, "already exists") || strings.Contains(body, "unique")
 }

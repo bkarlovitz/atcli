@@ -20,6 +20,7 @@ func newRecordsCommand() *cobra.Command {
 	}
 	recordsCmd.AddCommand(newRecordsCreateCommand())
 	recordsCmd.AddCommand(newRecordsUpsertCommand())
+	recordsCmd.AddCommand(newRecordsImportCommand())
 	return recordsCmd
 }
 

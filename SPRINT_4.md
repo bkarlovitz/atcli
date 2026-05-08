@@ -26,7 +26,7 @@ After this sprint, a user can point the CLI at an agent-produced CSV and see a v
   - Provide a raw JSON escape hatch for complex attributes through static `--set-json`; defer explicit clearing to a future command or flag.
   - Validation: unit tests cover each supported type, invalid values, multi-value splitting, empty cells, and JSON static values.
 
-- [ ] **Task 4.4**: Implement `records import <object> <csv>` dry-run mode
+- [x] **Task 4.4**: Implement `records import <object> <csv>` dry-run mode
   - Add `records import <object> <csv>` with dry-run as the default behavior.
   - Treat `<object>` as an Attio object slug or ID, usually plural for standard objects.
   - Use the Sprint 3 matching attribute policy, defaulting to upsert planning unless `--mode create` is passed.

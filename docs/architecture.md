@@ -9,7 +9,8 @@ atcli is intentionally small. Keep the structure boring until the command surfac
 ├── main.go
 ├── cmd/
 ├── internal/auth/
-└── internal/attio/
+├── internal/attio/
+└── internal/importplan/
 ```
 
 ## Entry Point
@@ -30,6 +31,7 @@ Current files:
 - [../cmd/match_policy.go](../cmd/match_policy.go): safe default and explicit match policy for record upserts.
 - [../cmd/record_metadata.go](../cmd/record_metadata.go): metadata lookup and local validation for record creates and upserts.
 - [../cmd/records.go](../cmd/records.go): one-off record create and upsert commands.
+- [../cmd/records_import.go](../cmd/records_import.go): CSV import dry-run command wiring and output.
 - [../cmd/schema_output.go](../cmd/schema_output.go): table output helpers for schema discovery.
 - [../cmd/value_flags.go](../cmd/value_flags.go): `--set` and `--set-json` parsing for record writes.
 - [../cmd/whoami.go](../cmd/whoami.go): token introspection and optional member display.
@@ -37,6 +39,19 @@ Current files:
 - [../cmd/write_output.go](../cmd/write_output.go): table and JSON output helpers for one-off writes.
 
 Commands should stay thin. If a command needs Attio API behavior, add it under `internal/attio`.
+
+## CSV Import Planning
+
+[../internal/importplan](../internal/importplan) owns CSV import dry-run behavior that is not Attio-specific API plumbing.
+
+Responsibilities:
+
+- Load CSV files, validate headers, preserve row numbers, and reject malformed input.
+- Build CSV-column to Attio-attribute mapping plans from headers, `--map`, `--ignore`, and static values.
+- Prepare first-pass Attio values from CSV cells using optional object attribute metadata.
+- Build row-by-row dry-run plans with validation status, skipped empty cells, warnings, and values.
+
+The command layer still owns Cobra flags, token/client loading, metadata fallback policy, and table/JSONL output.
 
 ## Auth
 
@@ -61,5 +76,6 @@ Current behavior:
 - Object, list, and attribute discovery used by schema commands.
 - Record create support used by `records create`.
 - Record assert support used by `records upsert`.
+- Object and attribute discovery used by `records import` dry-run validation.
 
 Keep endpoint-specific response structs close to the method that uses them until reuse justifies splitting them out.

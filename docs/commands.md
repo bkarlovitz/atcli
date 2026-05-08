@@ -276,3 +276,73 @@ Payload:
   }
 }
 ```
+
+## `atcli records import <object> <csv>`
+
+Plans a CSV record import without writing records. This command is dry-run only: it never calls Attio record create or assert endpoints.
+
+Behavior:
+
+- Treats `<object>` as an Attio object slug or ID. Standard object slugs are usually plural, such as `people` and `companies`.
+- Reads CSV files with a header row and preserves CSV row numbers for validation output.
+- Rejects empty headers, duplicate headers, inconsistent row lengths, empty files, unreadable files, mapping conflicts, and malformed static values before planning rows.
+- Maps CSV headers to Attio attribute slugs by default.
+- Supports repeated `--map csv_column=attio_attribute` for agent-friendly CSV headers.
+- Supports repeated `--ignore csv_column` to leave columns out of the planned payload.
+- Supports repeated `--set attr=value` and `--set-json attr=json` for static values added to every planned row.
+- Empty CSV cells are omitted and do not clear existing Attio values.
+- Supports `--multi-sep <sep>` to split cells for metadata-marked multivalue attributes.
+- Defaults to upsert planning. Use `--mode create` for create-only planning.
+- Uses the same safe matching defaults as `records upsert`: `companies` -> `domains`, `people` -> `email_addresses`, `users` -> `primary_email_address`, and `workspaces` -> `workspace_id`.
+- Requires explicit `--match` for custom objects, object IDs, `deals`, unknown slugs, and singular/plural variants without a safe default.
+- Fetches object attributes when credentials and `object_configuration:read` allow it.
+- When metadata is available, validates unknown attributes, writable/editable status, required values, matching attribute presence, and matching attribute uniqueness.
+- When metadata is unavailable, still plans explicit input when the match policy allows it and emits warnings that local validation was skipped.
+- Supports `--output table` and `--output jsonl`.
+
+Company import with header mapping:
+
+```bash
+./bin/atcli records import companies ./companies.csv \
+  --match domains \
+  --map 'Company Name=name' \
+  --map 'Primary Domain=domains' \
+  --ignore 'Internal Notes' \
+  --multi-sep ';'
+```
+
+Create-mode planning:
+
+```bash
+./bin/atcli records import companies ./companies.csv \
+  --mode create \
+  --map 'Company Name=name' \
+  --map 'Primary Domain=domains'
+```
+
+Static values and JSON escape hatch:
+
+```bash
+./bin/atcli records import companies ./companies.csv \
+  --match domains \
+  --set lifecycle_stage='Prospect' \
+  --set-json 'tags=["agent-import","reviewed"]'
+```
+
+Agent-oriented JSONL output:
+
+```bash
+./bin/atcli records import people ./people.csv \
+  --match email_addresses \
+  --map 'Email=email_addresses' \
+  --map 'Full Name=name' \
+  --output jsonl
+```
+
+Each JSONL line is one planned row with row number, mode, object, matching attribute, values, warnings, skipped empty cells, and validation status. Record IDs are not invented; the planner omits record identifiers unless a future lookup can prove them.
+
+Recommended import order:
+
+1. Import or plan linked parent objects first, usually `companies`.
+2. Review JSONL validation output for missing required values and match warnings.
+3. Import or plan linked child objects, usually `people`, after parent identifiers or unique match values are stable.

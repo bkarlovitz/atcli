@@ -16,6 +16,7 @@ Current command surface:
 - `atcli lists attributes`
 - `atcli records create`
 - `atcli records upsert`
+- `atcli records import`
 
 ## Fast Context
 
@@ -25,6 +26,7 @@ Current command surface:
 - Commands live in [cmd](cmd).
 - Attio REST helpers live in [internal/attio](internal/attio).
 - Auth storage and token introspection live in [internal/auth](internal/auth).
+- CSV import loading, mapping, conversion, and planning live in [internal/importplan](internal/importplan).
 - Local binaries should be built into `bin/`; `bin/` is gitignored.
 
 ## Verification Commands
@@ -52,6 +54,7 @@ For command wiring:
 ./bin/atcli records --help
 ./bin/atcli records create --help
 ./bin/atcli records upsert --help
+./bin/atcli records import --help
 ```
 
 For live Attio testing, prefer:
@@ -73,6 +76,7 @@ For record write testing, prefer dry runs unless intentionally creating workspac
 ```bash
 ATTIO_ACCESS_TOKEN='token' ./bin/atcli records create companies --set name='Example Co' --set-json 'domains=["example.com"]' --dry-run
 ATTIO_ACCESS_TOKEN='token' ./bin/atcli records upsert companies --match domains --set name='Example Co' --set-json 'domains=["example.com"]' --dry-run
+ATTIO_ACCESS_TOKEN='token' ./bin/atcli records import companies ./companies.csv --match domains --output jsonl
 ```
 
 Do not print real tokens in logs, docs, tests, or final responses.

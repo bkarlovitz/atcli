@@ -41,7 +41,7 @@ After this sprint, a user can point the CLI at an agent-produced CSV and see a v
   - Include record identifiers only when known from input or metadata; do not invent IDs.
   - Validation: tests cover table summaries, JSONL shape, warnings, and stable output with missing optional metadata.
 
-- [ ] **Task 4.6**: Document CSV dry-run planning
+- [x] **Task 4.6**: Document CSV dry-run planning
   - Update `docs/commands.md` with CSV dry-run examples, mapping examples, ignore examples, and `--output jsonl`.
   - Update `docs/attio-api.md` with CSV planning assumptions and supported first-pass attribute conversions.
   - Document empty-cell semantics, match defaults, and recommended import order for linked objects, such as companies before people.

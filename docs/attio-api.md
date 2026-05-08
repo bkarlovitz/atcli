@@ -324,3 +324,54 @@ Error behavior:
 - Command-facing errors normalize missing auth, missing `record_permission:read-write`, validation failures, non-unique matching attributes, rate limits, and network timeouts.
 - API error status and response bodies remain wrapped in the returned error for debugging.
 - The active bearer token is redacted from preserved API error bodies if an upstream response echoes it.
+
+## CSV Import Planning
+
+`atcli records import <object> <csv>` is a local dry-run planner. It uses Attio metadata when available, but it does not call record write endpoints.
+
+Endpoints used when credentials/scopes allow metadata validation:
+
+- `GET /objects`
+- `GET /objects/{object}/attributes`
+
+Endpoints intentionally not used:
+
+- `POST /objects/{object}/records`
+- `PUT /objects/{object}/records?matching_attribute={attribute}`
+
+CSV planning assumptions:
+
+- CSV headers map to Attio attribute API slugs by default.
+- `--map csv_column=attio_attribute` changes the target attribute for a CSV column.
+- `--ignore csv_column` removes a CSV column from the planned payload.
+- `--set attr=value` and `--set-json attr=json` add static values to every planned row.
+- Duplicate target attributes and conflicts between mapped and static attributes are rejected locally.
+- Empty CSV cells are omitted from the planned values. They do not clear existing Attio values.
+- Explicit clearing is intentionally deferred to a future command or flag.
+- Complex attributes can be supplied through static `--set-json` values when the first-pass CSV conversion is not rich enough.
+
+Supported first-pass conversions when attribute metadata is available:
+
+| Attio attribute kind | CSV behavior |
+| --- | --- |
+| text-like, personal/name-like, email address, domain, phone number | trimmed string passthrough |
+| select/status | trimmed option title passthrough |
+| relationship/reference-like or unknown complex types | trimmed string passthrough until richer conversion exists |
+| number | parsed as a JSON number-compatible float |
+| checkbox/boolean | parses `true/false`, `yes/no`, `y/n`, and `1/0` |
+| date | validates and emits ISO `YYYY-MM-DD` |
+| timestamp/date-time | validates RFC3339 and emits UTC RFC3339 |
+| metadata-marked multivalue attributes with `--multi-sep` | splits the cell, trims parts, and omits empty parts |
+
+Matching behavior:
+
+- Import planning defaults to upsert mode.
+- Upsert mode uses the same safe match defaults as `records upsert`.
+- Metadata validation checks that the matching attribute exists, is unique, and has a row value when metadata is available.
+- If metadata is blocked by missing `object_configuration:read`, planning can continue only when the match attribute was explicit; otherwise the user must pass `--match`.
+
+Import order guidance:
+
+- Plan or import linked parent objects first, such as `companies`.
+- Then plan child objects, such as `people`, using stable unique values from the parent import.
+- Review JSONL row validation before enabling any future non-dry-run import flow.

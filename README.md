@@ -32,6 +32,16 @@ Use dry runs for one-off record writes until the payload looks right:
   --dry-run
 ```
 
+Plan CSV imports without writing records:
+
+```bash
+./bin/atcli records import companies ./companies.csv \
+  --match domains \
+  --map 'Company Name=name' \
+  --map 'Domain=domains' \
+  --output jsonl
+```
+
 ## Documentation
 
 Start with [docs/README.md](docs/README.md).

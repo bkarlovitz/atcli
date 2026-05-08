@@ -47,10 +47,10 @@ func isMetadataPermissionError(err error) bool {
 }
 
 func validateRecordCreateValues(values map[string]any, attributes []attio.Attribute) error {
-	bySlug := make(map[string]attio.Attribute, len(attributes))
+	byIdentifier := make(map[string]attio.Attribute, len(attributes))
 	for _, attribute := range attributes {
-		if attribute.APISlug != "" {
-			bySlug[attribute.APISlug] = attribute
+		for _, identifier := range attributeIdentifiers(attribute) {
+			byIdentifier[identifier] = attribute
 		}
 	}
 
@@ -61,7 +61,7 @@ func validateRecordCreateValues(values map[string]any, attributes []attio.Attrib
 	sort.Strings(names)
 
 	for _, name := range names {
-		attribute, ok := bySlug[name]
+		attribute, ok := byIdentifier[name]
 		if !ok {
 			return fmt.Errorf("unknown attribute %q", name)
 		}
@@ -78,8 +78,7 @@ func validateRecordCreateValues(values map[string]any, attributes []attio.Attrib
 		if !attribute.IsRequired || attribute.APISlug == "" || !attributeCanBeSetOnCreate(attribute) {
 			continue
 		}
-		value, ok := values[attribute.APISlug]
-		if !ok || value == nil {
+		if !recordValuePresent(values, attributeIdentifiers(attribute)) {
 			missingRequired = append(missingRequired, attribute.APISlug)
 		}
 	}
@@ -89,6 +88,53 @@ func validateRecordCreateValues(values map[string]any, attributes []attio.Attrib
 	}
 
 	return nil
+}
+
+func validateRecordMatchAttribute(values map[string]any, attributes []attio.Attribute, match string) error {
+	attribute, ok := findAttributeByIdentifier(attributes, match)
+	if !ok {
+		return fmt.Errorf("matching attribute %q was not found in object metadata", match)
+	}
+	if !attribute.IsUnique {
+		return fmt.Errorf("matching attribute %q is not unique; choose a unique attribute with --match", match)
+	}
+	if !recordValuePresent(values, attributeIdentifiers(attribute)) {
+		return fmt.Errorf("matching attribute %q must have a value in the record payload", match)
+	}
+
+	return nil
+}
+
+func findAttributeByIdentifier(attributes []attio.Attribute, identifier string) (attio.Attribute, bool) {
+	for _, attribute := range attributes {
+		for _, candidate := range attributeIdentifiers(attribute) {
+			if candidate == identifier {
+				return attribute, true
+			}
+		}
+	}
+	return attio.Attribute{}, false
+}
+
+func attributeIdentifiers(attribute attio.Attribute) []string {
+	identifiers := make([]string, 0, 2)
+	if attribute.APISlug != "" {
+		identifiers = append(identifiers, attribute.APISlug)
+	}
+	if attribute.ID.AttributeID != "" {
+		identifiers = append(identifiers, attribute.ID.AttributeID)
+	}
+	return identifiers
+}
+
+func recordValuePresent(values map[string]any, identifiers []string) bool {
+	for _, identifier := range identifiers {
+		value, ok := values[identifier]
+		if ok && value != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func attributeCanBeSetOnCreate(attribute attio.Attribute) bool {

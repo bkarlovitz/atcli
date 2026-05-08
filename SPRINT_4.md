@@ -10,7 +10,7 @@ After this sprint, a user can point the CLI at an agent-produced CSV and see a v
   - Preserve row numbers for error reporting.
   - Validation: unit tests use fixture CSVs for valid input, duplicate headers, empty headers, uneven rows, empty files, and unreadable paths.
 
-- [ ] **Task 4.2**: Add CSV-to-Attio mapping rules
+- [x] **Task 4.2**: Add CSV-to-Attio mapping rules
   - Map CSV headers to Attio attribute slugs by default.
   - Support repeated `--map csv_column=attio_attribute`.
   - Support repeated `--ignore csv_column`.

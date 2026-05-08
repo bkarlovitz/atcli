@@ -22,6 +22,7 @@ type recordsImportOptions struct {
 	ignoreColumns   []string
 	apply           bool
 	continueOnError bool
+	errorsPath      string
 	mode            string
 	outputFormat    string
 	matchAttribute  string
@@ -61,6 +62,7 @@ Attio attributes and --ignore to leave a CSV column out of the planned payload.
 	importCmd.Flags().StringArrayVar(&opts.ignoreColumns, "ignore", nil, "ignore a CSV column")
 	importCmd.Flags().BoolVar(&opts.apply, "apply", false, "execute the planned import and write records")
 	importCmd.Flags().BoolVar(&opts.continueOnError, "continue-on-error", false, "keep applying remaining rows after a row validation or write failure")
+	importCmd.Flags().StringVar(&opts.errorsPath, "errors", "", "write failed input rows to this CSV path in apply mode")
 	importCmd.Flags().StringVar(&opts.mode, "mode", importplan.ModeUpsert, "planning mode: upsert or create")
 	importCmd.Flags().StringVar(&opts.outputFormat, "output", outputFormatTable, "output format: table or jsonl")
 	importCmd.Flags().StringVar(&opts.matchAttribute, "match", "", "unique attribute slug or ID to match existing records in upsert mode")
@@ -76,8 +78,11 @@ func runRecordsImport(cmd *cobra.Command, object, csvPath string, opts recordsIm
 	if err := validateImportOutputFormat(opts.outputFormat); err != nil {
 		return err
 	}
+	if opts.errorsPath != "" && !opts.apply {
+		return fmt.Errorf("--errors requires --apply")
+	}
 
-	_, plan, err := buildRecordsImportPlan(cmd, object, csvPath, opts)
+	document, plan, err := buildRecordsImportPlan(cmd, object, csvPath, opts)
 	if err != nil {
 		return err
 	}
@@ -94,6 +99,9 @@ func runRecordsImport(cmd *cobra.Command, object, csvPath string, opts recordsIm
 		ContinueOnError: opts.continueOnError,
 	})
 	if err := printImportApplyOutput(cmd.OutOrStdout(), opts.outputFormat, result); err != nil {
+		return err
+	}
+	if err := writeImportErrorCSV(opts.errorsPath, document, result); err != nil {
 		return err
 	}
 	if result.Failed > 0 {

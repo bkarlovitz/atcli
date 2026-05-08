@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -520,6 +521,114 @@ func TestRecordsImportApplySanitizesRowErrors(t *testing.T) {
 	assertNotContains(t, err.Error(), "leaked-secret-value")
 }
 
+func TestRecordsImportApplyDoesNotWriteErrorsFileWithoutFailures(t *testing.T) {
+	csvPath := writeImportCSV(t, "no-errors.csv", "email_addresses,name\nada@example.com,Ada Lovelace\n")
+	errorsPath := filepath.Join(t.TempDir(), "errors.csv")
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"people"}]}`))
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","type":"email-address","is_writable":true,"is_unique":true},{"api_slug":"name","type":"personal-name","is_writable":true}]}`))
+		case "/objects/people/records":
+			_, _ = w.Write([]byte(`{"data":{"id":{"record_id":"record-ada"},"status":"updated","created":false}}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--apply", "--errors", errorsPath)
+	if err != nil {
+		t.Fatalf("expected no error, got %v\n%s", err, output)
+	}
+	if _, err := os.Stat(errorsPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no errors CSV to be created, stat err=%v", err)
+	}
+}
+
+func TestRecordsImportApplyWritesOneFailedWriteRowToErrorsCSV(t *testing.T) {
+	csvPath := writeImportCSV(t, "one-error.csv", "email_addresses,name,notes\nada@example.com,Ada,ok\nbad@example.com,\"Bad, Row\",\" keep \"\n")
+	errorsPath := filepath.Join(t.TempDir(), "errors.csv")
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"people"}]}`))
+			return
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","type":"email-address","is_writable":true,"is_unique":true},{"api_slug":"name","type":"personal-name","is_writable":true},{"api_slug":"notes","type":"text","is_writable":true}]}`))
+			return
+		case "/objects/people/records":
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+
+		email := decodeImportRequestEmail(t, r)
+		if email == "bad@example.com" {
+			http.Error(w, `{"error":"invalid row"}`, http.StatusUnprocessableEntity)
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"id":{"record_id":"record-ada"},"status":"updated","created":false}}`))
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--apply", "--continue-on-error", "--errors", errorsPath)
+	if err == nil {
+		t.Fatalf("expected apply failure, got nil\n%s", output)
+	}
+
+	records := readCSVFile(t, errorsPath)
+	if len(records) != 2 {
+		t.Fatalf("expected header and one failed row, got %#v", records)
+	}
+	wantHeaderPrefix := []string{"email_addresses", "name", "notes"}
+	for i, want := range wantHeaderPrefix {
+		if records[0][i] != want {
+			t.Fatalf("expected header %d to be %q, got %#v", i, want, records[0])
+		}
+	}
+	if records[1][0] != "bad@example.com" || records[1][1] != "Bad, Row" || records[1][2] != " keep " {
+		t.Fatalf("failed row did not preserve original data: %#v", records[1])
+	}
+	if records[1][3] != "3" || records[1][7] != "failed" {
+		t.Fatalf("unexpected error metadata columns: %#v", records[1])
+	}
+	if !strings.Contains(records[1][8], "Attio rejected") {
+		t.Fatalf("expected write failure context, got %#v", records[1])
+	}
+}
+
+func TestRecordsImportApplyWritesMultipleValidationFailuresToErrorsCSV(t *testing.T) {
+	csvPath := writeImportCSV(t, "validation-errors.csv", "email_addresses,name\nada@example.com,\ncharles@example.com,\n")
+	errorsPath := filepath.Join(t.TempDir(), "errors.csv")
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"people"}]}`))
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","type":"email-address","is_writable":true,"is_unique":true},{"api_slug":"name","type":"personal-name","is_writable":true,"is_required":true}]}`))
+		case "/objects/people/records":
+			t.Fatalf("write endpoint should not be called for invalid planned rows")
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--apply", "--continue-on-error", "--errors", errorsPath)
+	if err == nil {
+		t.Fatalf("expected apply failure, got nil\n%s", output)
+	}
+
+	records := readCSVFile(t, errorsPath)
+	if len(records) != 3 {
+		t.Fatalf("expected header and two failed rows, got %#v", records)
+	}
+	if records[1][2] != "2" || records[2][2] != "3" {
+		t.Fatalf("expected original row numbers 2 and 3, got %#v", records)
+	}
+	if !strings.Contains(records[1][7], `missing required attribute "name"`) || !strings.Contains(records[2][7], `missing required attribute "name"`) {
+		t.Fatalf("expected validation error context, got %#v", records)
+	}
+}
+
 func TestRecordsImportApplyReusesPlanValidationBeforeWrites(t *testing.T) {
 	csvPath := writeImportCSV(t, "invalid-apply.csv", "email_addresses,name\nada@example.com,\n")
 	writeCalled := false
@@ -762,6 +871,7 @@ func TestRecordsImportHelp(t *testing.T) {
 		"--ignore",
 		"--apply",
 		"--continue-on-error",
+		"--errors",
 		"--set",
 		"--set-json",
 		"--mode",
@@ -812,6 +922,21 @@ func decodeImportRequestEmail(t *testing.T, r *http.Request) string {
 	}
 	email, _ := payload.Data.Values["email_addresses"].(string)
 	return email
+}
+
+func readCSVFile(t *testing.T, path string) [][]string {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open CSV %q: %v", path, err)
+	}
+	defer file.Close()
+
+	records, err := csv.NewReader(file).ReadAll()
+	if err != nil {
+		t.Fatalf("read CSV %q: %v", path, err)
+	}
+	return records
 }
 
 func captureImportRateLimitSleeps(t *testing.T) *[]time.Duration {

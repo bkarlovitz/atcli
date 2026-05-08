@@ -144,6 +144,116 @@ func TestRecordsImportApplyUpsertModePropagatesIdentity(t *testing.T) {
 	assertContains(t, output, "updated")
 }
 
+func TestRecordsImportApplyJSONLOutputIncludesRowsAndSummary(t *testing.T) {
+	csvPath := writeImportCSV(t, "apply-jsonl.csv", "email_addresses,name\nada@example.com,Ada Lovelace\ncharles@example.com,Charles Babbage\n")
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"people"}]}`))
+			return
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","type":"email-address","is_writable":true,"is_unique":true},{"api_slug":"name","type":"personal-name","is_writable":true}]}`))
+			return
+		case "/objects/people/records":
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+
+		email := decodeImportRequestEmail(t, r)
+		switch email {
+		case "ada@example.com":
+			_, _ = w.Write([]byte(`{"data":{"id":{"record_id":"record-ada"},"status":"updated","created":false}}`))
+		case "charles@example.com":
+			_, _ = w.Write([]byte(`{"data":{"id":{"record_id":"record-charles"},"status":"created","created":true}}`))
+		default:
+			t.Fatalf("unexpected email %q", email)
+		}
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--apply", "--output", "jsonl")
+	if err != nil {
+		t.Fatalf("expected no error, got %v\n%s", err, output)
+	}
+
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected two row events and one summary event, got %d:\n%s", len(lines), output)
+	}
+
+	var firstRow struct {
+		Type                string `json:"type"`
+		RowNumber           int    `json:"row_number"`
+		Mode                string `json:"mode"`
+		Object              string `json:"object"`
+		MatchingAttribute   string `json:"matching_attribute"`
+		RecordID            string `json:"record_id"`
+		Status              string `json:"status"`
+		WriteEndpointCalled bool   `json:"write_endpoint_called"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &firstRow); err != nil {
+		t.Fatalf("decode first row event: %v\n%s", err, output)
+	}
+	if firstRow.Type != "row" || firstRow.RowNumber != 2 || firstRow.Mode != "upsert" || firstRow.Object != "people" {
+		t.Fatalf("unexpected first row event identity: %#v", firstRow)
+	}
+	if firstRow.MatchingAttribute != "email_addresses" || firstRow.RecordID != "record-ada" || firstRow.Status != "updated" || !firstRow.WriteEndpointCalled {
+		t.Fatalf("unexpected first row event result: %#v", firstRow)
+	}
+
+	var summary struct {
+		Type      string `json:"type"`
+		Planned   int    `json:"planned"`
+		Succeeded int    `json:"succeeded"`
+		Failed    int    `json:"failed"`
+		Skipped   int    `json:"skipped"`
+		Created   int    `json:"created"`
+		Updated   int    `json:"updated"`
+		ElapsedMS int64  `json:"elapsed_ms"`
+		Records   []struct {
+			RowNumber int    `json:"row_number"`
+			RecordID  string `json:"record_id"`
+			Status    string `json:"status"`
+		} `json:"records"`
+	}
+	if err := json.Unmarshal([]byte(lines[2]), &summary); err != nil {
+		t.Fatalf("decode summary event: %v\n%s", err, output)
+	}
+	if summary.Type != "summary" || summary.Planned != 2 || summary.Succeeded != 2 || summary.Failed != 0 || summary.Skipped != 0 {
+		t.Fatalf("unexpected summary counts: %#v", summary)
+	}
+	if summary.Created != 1 || summary.Updated != 1 || summary.ElapsedMS < 0 {
+		t.Fatalf("unexpected summary status totals: %#v", summary)
+	}
+	if len(summary.Records) != 2 || summary.Records[0].RecordID != "record-ada" || summary.Records[1].RecordID != "record-charles" {
+		t.Fatalf("unexpected summary records: %#v", summary.Records)
+	}
+}
+
+func TestRecordsImportApplyTableOutputHandlesMissingCreateUpdateStatus(t *testing.T) {
+	csvPath := writeImportCSV(t, "missing-status.csv", "email_addresses,name\nada@example.com,Ada Lovelace\n")
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"people"}]}`))
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","type":"email-address","is_writable":true,"is_unique":true},{"api_slug":"name","type":"personal-name","is_writable":true}]}`))
+		case "/objects/people/records":
+			_, _ = w.Write([]byte(`{"data":{"id":{"record_id":"record-no-status"}}}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--apply")
+	if err != nil {
+		t.Fatalf("expected no error, got %v\n%s", err, output)
+	}
+	assertContains(t, output, "record-no-status")
+	assertContains(t, output, "succeeded")
+	assertContains(t, output, "Rows: 1 planned, 1 succeeded, 0 failed, 0 skipped, 0 created, 0 updated")
+	assertContains(t, output, "Elapsed:")
+}
+
 func TestRecordsImportApplyRetriesRateLimitWithRetryAfter(t *testing.T) {
 	sleeps := captureImportRateLimitSleeps(t)
 	csvPath := writeImportCSV(t, "retry-success.csv", "email_addresses,name\nada@example.com,Ada Lovelace\ncharles@example.com,Charles Babbage\n")
@@ -201,7 +311,8 @@ func TestRecordsImportApplyRetriesRateLimitWithRetryAfter(t *testing.T) {
 	}
 	assertContains(t, output, "record-ada")
 	assertContains(t, output, "record-charles")
-	assertContains(t, output, "Rows: 2 (succeeded: 2, failed: 0, created: 1, updated: 1)")
+	assertContains(t, output, "Rows: 2 planned, 2 succeeded, 0 failed, 0 skipped, 1 created, 1 updated")
+	assertContains(t, output, "Elapsed:")
 }
 
 func TestRecordsImportApplyRateLimitExhaustionReportsFailure(t *testing.T) {
@@ -260,7 +371,8 @@ func TestRecordsImportApplyRateLimitExhaustionReportsFailure(t *testing.T) {
 	assertContains(t, output, "record-ada")
 	assertContains(t, output, "failed")
 	assertContains(t, output, "rate limit")
-	assertContains(t, output, "Rows: 2 (succeeded: 1, failed: 1, created: 0, updated: 1)")
+	assertContains(t, output, "Rows: 2 planned, 1 succeeded, 1 failed, 0 skipped, 0 created, 1 updated")
+	assertContains(t, output, "Elapsed:")
 }
 
 func TestRecordsImportApplyStopsAfterWriteFailureByDefault(t *testing.T) {
@@ -303,6 +415,7 @@ func TestRecordsImportApplyStopsAfterWriteFailureByDefault(t *testing.T) {
 	assertContains(t, output, "record-ada")
 	assertContains(t, output, "failed")
 	assertContains(t, output, "skipped after row 3 failed")
+	assertContains(t, output, "Rows: 3 planned, 1 succeeded, 1 failed, 1 skipped, 0 created, 1 updated")
 	assertNotContains(t, output, "record-third")
 }
 

@@ -40,15 +40,16 @@ type importApplyResult struct {
 }
 
 type importApplyRowResult struct {
-	RowNumber         int
-	Mode              string
-	Object            string
-	MatchingAttribute string
-	RecordID          string
-	Status            string
-	Outcome           string
-	Created           *bool
-	Errors            []string
+	RowNumber           int
+	Mode                string
+	Object              string
+	MatchingAttribute   string
+	RecordID            string
+	Status              string
+	Outcome             string
+	Created             *bool
+	WriteEndpointCalled bool
+	Errors              []string
 }
 
 func executeImportPlan(ctx context.Context, client *attio.Client, plan *importplan.ImportPlan, opts importExecutionOptions) importApplyResult {
@@ -80,6 +81,7 @@ func executeImportPlan(ctx context.Context, client *attio.Client, plan *importpl
 			continue
 		}
 
+		rowResult.WriteEndpointCalled = true
 		record, outcome, created, err := executeImportRow(ctx, client, plan, row)
 		if err != nil {
 			rowResult.Status = "failed"
@@ -261,13 +263,17 @@ func printImportApplyTable(out io.Writer, result importApplyResult) error {
 	}
 	if _, err := fmt.Fprintf(
 		out,
-		"Rows: %d (succeeded: %d, failed: %d, created: %d, updated: %d)\n",
+		"Rows: %d planned, %d succeeded, %d failed, %d skipped, %d created, %d updated\n",
 		result.Planned,
 		result.Succeeded,
 		result.Failed,
+		result.Skipped,
 		result.Created,
 		result.Updated,
 	); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "Elapsed: %dms\n", importElapsedMilliseconds(result.Elapsed)); err != nil {
 		return err
 	}
 
@@ -294,35 +300,90 @@ func printImportApplyJSONL(out io.Writer, result importApplyResult) error {
 	encoder := json.NewEncoder(out)
 	for _, row := range result.Rows {
 		event := importApplyRowEvent{
-			Type:              "row",
-			RowNumber:         row.RowNumber,
-			Mode:              row.Mode,
-			Object:            row.Object,
-			MatchingAttribute: row.MatchingAttribute,
-			RecordID:          row.RecordID,
-			Status:            row.Status,
-			Outcome:           row.Outcome,
-			Created:           row.Created,
-			Errors:            row.Errors,
+			Type:                "row",
+			RowNumber:           row.RowNumber,
+			Mode:                row.Mode,
+			Object:              row.Object,
+			MatchingAttribute:   row.MatchingAttribute,
+			RecordID:            row.RecordID,
+			Status:              row.Status,
+			Outcome:             row.Outcome,
+			Created:             row.Created,
+			WriteEndpointCalled: row.WriteEndpointCalled,
+			Errors:              row.Errors,
 		}
 		if err := encoder.Encode(event); err != nil {
 			return err
 		}
 	}
-	return nil
+	return encoder.Encode(importApplySummaryEvent{
+		Type:              "summary",
+		Object:            result.ObjectIdentifier,
+		Mode:              result.Mode,
+		MatchingAttribute: result.MatchAttribute,
+		Planned:           result.Planned,
+		Succeeded:         result.Succeeded,
+		Failed:            result.Failed,
+		Skipped:           result.Skipped,
+		Created:           result.Created,
+		Updated:           result.Updated,
+		ElapsedMS:         importElapsedMilliseconds(result.Elapsed),
+		Records:           importApplySummaryRecords(result),
+	})
 }
 
 type importApplyRowEvent struct {
-	Type              string   `json:"type"`
-	RowNumber         int      `json:"row_number"`
-	Mode              string   `json:"mode"`
-	Object            string   `json:"object"`
-	MatchingAttribute string   `json:"matching_attribute,omitempty"`
-	RecordID          string   `json:"record_id,omitempty"`
-	Status            string   `json:"status"`
-	Outcome           string   `json:"outcome,omitempty"`
-	Created           *bool    `json:"created,omitempty"`
-	Errors            []string `json:"errors,omitempty"`
+	Type                string   `json:"type"`
+	RowNumber           int      `json:"row_number"`
+	Mode                string   `json:"mode"`
+	Object              string   `json:"object"`
+	MatchingAttribute   string   `json:"matching_attribute,omitempty"`
+	RecordID            string   `json:"record_id,omitempty"`
+	Status              string   `json:"status"`
+	Outcome             string   `json:"outcome,omitempty"`
+	Created             *bool    `json:"created,omitempty"`
+	WriteEndpointCalled bool     `json:"write_endpoint_called"`
+	Errors              []string `json:"errors,omitempty"`
+}
+
+type importApplySummaryEvent struct {
+	Type              string                     `json:"type"`
+	Object            string                     `json:"object"`
+	Mode              string                     `json:"mode"`
+	MatchingAttribute string                     `json:"matching_attribute,omitempty"`
+	Planned           int                        `json:"planned"`
+	Succeeded         int                        `json:"succeeded"`
+	Failed            int                        `json:"failed"`
+	Skipped           int                        `json:"skipped"`
+	Created           int                        `json:"created"`
+	Updated           int                        `json:"updated"`
+	ElapsedMS         int64                      `json:"elapsed_ms"`
+	Records           []importApplySummaryRecord `json:"records,omitempty"`
+}
+
+type importApplySummaryRecord struct {
+	RowNumber int    `json:"row_number"`
+	RecordID  string `json:"record_id"`
+	Status    string `json:"status"`
+}
+
+func importApplySummaryRecords(result importApplyResult) []importApplySummaryRecord {
+	records := make([]importApplySummaryRecord, 0, result.Succeeded)
+	for _, row := range result.Rows {
+		if row.RecordID == "" {
+			continue
+		}
+		records = append(records, importApplySummaryRecord{
+			RowNumber: row.RowNumber,
+			RecordID:  row.RecordID,
+			Status:    row.Status,
+		})
+	}
+	return records
+}
+
+func importElapsedMilliseconds(elapsed time.Duration) int64 {
+	return elapsed.Round(time.Millisecond).Milliseconds()
 }
 
 func sanitizeImportErrors(errors []string) []string {

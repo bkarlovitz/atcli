@@ -12,6 +12,7 @@ import (
 const (
 	outputFormatTable = "table"
 	outputFormatJSON  = "json"
+	outputFormatJSONL = "jsonl"
 )
 
 type recordWriteOutput struct {

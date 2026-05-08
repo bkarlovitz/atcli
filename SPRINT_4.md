@@ -34,7 +34,7 @@ After this sprint, a user can point the CLI at an agent-produced CSV and see a v
   - Avoid all record write endpoints in dry-run mode.
   - Validation: command tests cover planned upsert, planned create, unknown columns, missing required values, non-writable attributes, metadata permission fallback, and no write endpoint calls.
 
-- [ ] **Task 4.5**: Add dry-run output for humans and agents
+- [x] **Task 4.5**: Add dry-run output for humans and agents
   - Support `--output table|jsonl`.
   - Table output should summarize row count, mode, object, matching attribute, skipped empty cells, warnings, and sample planned rows.
   - JSONL output should emit one machine-readable event per row with row number, mode, object, matching attribute, values, warnings, and validation status.

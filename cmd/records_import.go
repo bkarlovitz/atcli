@@ -20,6 +20,7 @@ type recordsImportOptions struct {
 	setJSONValues  []string
 	mapValues      []string
 	ignoreColumns  []string
+	apply          bool
 	mode           string
 	outputFormat   string
 	matchAttribute string
@@ -34,9 +35,10 @@ func newRecordsImportCommand() *cobra.Command {
 
 	importCmd := &cobra.Command{
 		Use:   "import <object> <csv>",
-		Short: "Plan a CSV record import without writing records",
+		Short: "Plan or apply a CSV record import",
 		Long: strings.TrimSpace(`
-Plan a CSV record import without calling Attio write endpoints.
+Plan a CSV record import without calling Attio write endpoints. Pass --apply to
+execute writes after the same validation and payload planning step.
 
 The <object> argument is an Attio object slug or ID. CSV headers map to Attio
 attribute slugs by default. Use --map to map agent-friendly CSV headers to
@@ -56,6 +58,7 @@ Attio attributes and --ignore to leave a CSV column out of the planned payload.
 	importCmd.Flags().StringArrayVar(&opts.setJSONValues, "set-json", nil, "set a static attribute as a JSON value (attr=json)")
 	importCmd.Flags().StringArrayVar(&opts.mapValues, "map", nil, "map a CSV column to an Attio attribute (csv_column=attio_attribute)")
 	importCmd.Flags().StringArrayVar(&opts.ignoreColumns, "ignore", nil, "ignore a CSV column")
+	importCmd.Flags().BoolVar(&opts.apply, "apply", false, "execute the planned import and write records")
 	importCmd.Flags().StringVar(&opts.mode, "mode", importplan.ModeUpsert, "planning mode: upsert or create")
 	importCmd.Flags().StringVar(&opts.outputFormat, "output", outputFormatTable, "output format: table or jsonl")
 	importCmd.Flags().StringVar(&opts.matchAttribute, "match", "", "unique attribute slug or ID to match existing records in upsert mode")
@@ -72,23 +75,47 @@ func runRecordsImport(cmd *cobra.Command, object, csvPath string, opts recordsIm
 		return err
 	}
 
-	document, err := importplan.LoadCSV(csvPath)
+	_, plan, err := buildRecordsImportPlan(cmd, object, csvPath, opts)
 	if err != nil {
 		return err
+	}
+
+	if !opts.apply {
+		return printImportPlanOutput(cmd.OutOrStdout(), opts.outputFormat, plan)
+	}
+
+	client, err := loadAttioClient()
+	if err != nil {
+		return err
+	}
+	result := executeImportPlan(cmd.Context(), client, plan)
+	if err := printImportApplyOutput(cmd.OutOrStdout(), opts.outputFormat, result); err != nil {
+		return err
+	}
+	if result.Failed > 0 {
+		return fmt.Errorf("import apply failed: %d row(s) failed", result.Failed)
+	}
+	return nil
+}
+
+func buildRecordsImportPlan(cmd *cobra.Command, object, csvPath string, opts recordsImportOptions) (*importplan.CSVDocument, *importplan.ImportPlan, error) {
+	document, err := importplan.LoadCSV(csvPath)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	staticValues, err := parseRecordValueFlags(opts.setValues, opts.setJSONValues)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	rules, err := importplan.ParseMappingRules(opts.mapValues)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	ignored, err := importplan.NormalizeIgnoredColumns(opts.ignoreColumns)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	mapping, err := importplan.BuildMappingPlan(document.Headers, importplan.MappingOptions{
 		Rules:        rules,
@@ -96,7 +123,7 @@ func runRecordsImport(cmd *cobra.Command, object, csvPath string, opts recordsIm
 		StaticValues: staticValues,
 	})
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	matchAttribute := ""
@@ -104,13 +131,13 @@ func runRecordsImport(cmd *cobra.Command, object, csvPath string, opts recordsIm
 	if opts.mode == importplan.ModeUpsert {
 		matchAttribute, matchDefaulted, err = resolveRecordMatchAttribute(object, opts.matchAttribute)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 	}
 
 	attributes, warnings, metadataAvailable, err := loadImportMetadata(cmd, object, opts.mode, matchDefaulted)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	plan, err := importplan.BuildImportPlan(document, mapping, importplan.ImportPlanOptions{
@@ -124,10 +151,10 @@ func runRecordsImport(cmd *cobra.Command, object, csvPath string, opts recordsIm
 		Warnings:          warnings,
 	})
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
-	return printImportPlanOutput(cmd.OutOrStdout(), opts.outputFormat, plan)
+	return document, plan, nil
 }
 
 func loadImportMetadata(cmd *cobra.Command, object, mode string, matchDefaulted bool) ([]attio.Attribute, []string, bool, error) {

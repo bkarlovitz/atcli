@@ -44,6 +44,131 @@ func TestRecordsImportPlansUpsertAndAvoidsWriteEndpoint(t *testing.T) {
 	}
 }
 
+func TestRecordsImportApplyCreateModeWritesPlannedRows(t *testing.T) {
+	csvPath := writeImportCSV(t, "companies.csv", "name,domains\nExample Co,example.com\n")
+	writeCalled := false
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"id":{"object_id":"object-company"},"api_slug":"companies","singular_noun":"Company","plural_noun":"Companies"}]}`))
+			return
+		case "/objects/companies/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"name","type":"text","is_writable":true,"is_required":true},{"api_slug":"domains","type":"domain","is_writable":true}]}`))
+			return
+		case "/objects/companies/records":
+			writeCalled = true
+			if r.Method != http.MethodPost {
+				t.Fatalf("expected POST, got %s", r.Method)
+			}
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+
+		var payload struct {
+			Data struct {
+				Values map[string]any `json:"values"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if payload.Data.Values["name"] != "Example Co" || payload.Data.Values["domains"] != "example.com" {
+			t.Fatalf("unexpected values payload: %#v", payload.Data.Values)
+		}
+		_, _ = w.Write([]byte(`{"data":{"id":{"object_id":"object-company","record_id":"record-company-1"}}}`))
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "companies", csvPath, "--mode", "create", "--apply")
+	if err != nil {
+		t.Fatalf("expected no error, got %v\n%s", err, output)
+	}
+	if !writeCalled {
+		t.Fatal("expected write endpoint to be called")
+	}
+	assertContains(t, output, "APPLY")
+	assertContains(t, output, "Mode: create")
+	assertContains(t, output, "record-company-1")
+	assertContains(t, output, "succeeded")
+}
+
+func TestRecordsImportApplyUpsertModePropagatesIdentity(t *testing.T) {
+	csvPath := writeImportCSV(t, "people-upsert.csv", "email_addresses,name\nada@example.com,Ada Lovelace\n")
+	writeCalled := false
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"id":{"object_id":"object-people"},"api_slug":"people","singular_noun":"Person","plural_noun":"People"}]}`))
+			return
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","type":"email-address","is_writable":true,"is_unique":true},{"api_slug":"name","type":"personal-name","is_writable":true}]}`))
+			return
+		case "/objects/people/records":
+			writeCalled = true
+			if r.Method != http.MethodPut {
+				t.Fatalf("expected PUT, got %s", r.Method)
+			}
+			if got := r.URL.Query().Get("matching_attribute"); got != "email_addresses" {
+				t.Fatalf("expected matching_attribute=email_addresses, got %q", got)
+			}
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+
+		var payload struct {
+			Data struct {
+				Values map[string]any `json:"values"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if payload.Data.Values["email_addresses"] != "ada@example.com" {
+			t.Fatalf("unexpected values payload: %#v", payload.Data.Values)
+		}
+		_, _ = w.Write([]byte(`{"data":{"id":{"object_id":"object-people","record_id":"record-person-1"},"status":"updated","created":false}}`))
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--apply")
+	if err != nil {
+		t.Fatalf("expected no error, got %v\n%s", err, output)
+	}
+	if !writeCalled {
+		t.Fatal("expected write endpoint to be called")
+	}
+	assertContains(t, output, "Mode: upsert")
+	assertContains(t, output, "Matching attribute: email_addresses")
+	assertContains(t, output, "record-person-1")
+	assertContains(t, output, "updated")
+}
+
+func TestRecordsImportApplyReusesPlanValidationBeforeWrites(t *testing.T) {
+	csvPath := writeImportCSV(t, "invalid-apply.csv", "email_addresses,name\nada@example.com,\n")
+	writeCalled := false
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"people"}]}`))
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","type":"email-address","is_writable":true,"is_unique":true},{"api_slug":"name","type":"personal-name","is_writable":true,"is_required":true}]}`))
+		case "/objects/people/records":
+			writeCalled = true
+			t.Fatalf("write endpoint should not be called after planned row validation failure")
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--apply")
+	if err == nil {
+		t.Fatalf("expected apply failure, got nil\n%s", output)
+	}
+	if writeCalled {
+		t.Fatal("write endpoint was called")
+	}
+	assertContains(t, output, "failed")
+	assertContains(t, output, `missing required attribute "name"`)
+}
+
 func TestRecordsImportPlansCreate(t *testing.T) {
 	csvPath := writeImportCSV(t, "companies.csv", "name,domains\nExample Co,example.com\n")
 	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -256,6 +381,7 @@ func TestRecordsImportHelp(t *testing.T) {
 		"slug or ID",
 		"--map",
 		"--ignore",
+		"--apply",
 		"--set",
 		"--set-json",
 		"--mode",

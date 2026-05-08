@@ -1,0 +1,23 @@
+# Build artifacts
+/atcli
+/bin/
+/dist/
+
+# Go test and coverage output
+*.test
+*.out
+coverage.*
+*.prof
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Editor and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

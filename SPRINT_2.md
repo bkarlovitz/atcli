@@ -16,7 +16,7 @@ After this sprint, a user can create a single Attio record from shell flags and 
   - Reject malformed flags, empty attribute names, duplicate attribute names across both flag types, and malformed JSON.
   - Validation: focused unit tests cover valid strings, valid JSON values, duplicates, empty names, missing `=`, and malformed JSON.
 
-- [ ] **Task 2.3**: Define one-off write output conventions
+- [x] **Task 2.3**: Define one-off write output conventions
   - Add reusable output helpers for table and JSON output used by one-off record commands.
   - For dry runs, output the exact JSON payload that would be sent and clearly mark that no write endpoint was called.
   - For successful writes, include record ID and object metadata when available.

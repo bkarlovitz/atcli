@@ -26,6 +26,13 @@ type entriesWriteOptions struct {
 	outputFormat   string
 }
 
+type entryWriteOperation string
+
+const (
+	entryWriteOperationAdd    entryWriteOperation = "add"
+	entryWriteOperationUpsert entryWriteOperation = "upsert"
+)
+
 type entryWriteList struct {
 	Identifier   string
 	ListID       string
@@ -57,6 +64,7 @@ func newEntriesCommand() *cobra.Command {
 		Short: "Add and manage Attio list entries",
 	}
 	entriesCmd.AddCommand(newEntriesAddCommand())
+	entriesCmd.AddCommand(newEntriesUpsertCommand())
 	return entriesCmd
 }
 
@@ -95,7 +103,50 @@ the list. List entries point at records and may have their own values.
 	return addCmd
 }
 
+func newEntriesUpsertCommand() *cobra.Command {
+	opts := entriesWriteOptions{
+		outputFormat: outputFormatTable,
+	}
+
+	upsertCmd := &cobra.Command{
+		Use:   "upsert <list>",
+		Short: "Create or update one Attio list entry by parent record",
+		Long: strings.TrimSpace(`
+Create or update one Attio list entry for an existing parent record.
+
+The <list> argument is an Attio list slug or ID. The --parent-object value is
+an Attio object slug or ID, and --parent-record-id is the record ID used to find
+the list entry. If no entry exists for that parent record, Attio creates one.
+`),
+		Args: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return fmt.Errorf("accepts 1 arg, received %d", len(args))
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runEntriesUpsert(cmd, args[0], opts)
+		},
+	}
+	upsertCmd.Flags().StringVar(&opts.parentObject, "parent-object", "", "parent object slug or ID for the record being asserted")
+	upsertCmd.Flags().StringVar(&opts.parentRecordID, "parent-record-id", "", "parent record ID used to find or create the list entry")
+	upsertCmd.Flags().StringArrayVar(&opts.setValues, "set", nil, "set a list-entry attribute as a string value (attr=value)")
+	upsertCmd.Flags().StringArrayVar(&opts.setJSONValues, "set-json", nil, "set a list-entry attribute as a JSON value (attr=json)")
+	upsertCmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "print the write payload without calling the write endpoint")
+	upsertCmd.Flags().StringVar(&opts.outputFormat, "output", outputFormatTable, "output format: table or json")
+
+	return upsertCmd
+}
+
 func runEntriesAdd(cmd *cobra.Command, list string, opts entriesWriteOptions) error {
+	return runEntryWrite(cmd, list, opts, entryWriteOperationAdd)
+}
+
+func runEntriesUpsert(cmd *cobra.Command, list string, opts entriesWriteOptions) error {
+	return runEntryWrite(cmd, list, opts, entryWriteOperationUpsert)
+}
+
+func runEntryWrite(cmd *cobra.Command, list string, opts entriesWriteOptions, operation entryWriteOperation) error {
 	if err := validateEntryWriteOptions(opts); err != nil {
 		return err
 	}
@@ -146,13 +197,14 @@ func runEntriesAdd(cmd *cobra.Command, list string, opts entriesWriteOptions) er
 		}
 	}
 
-	entryResult, err := client.CreateListEntry(ctx, list, attio.ListEntryWrite{
+	entryWrite := attio.ListEntryWrite{
 		ParentRecordID: opts.parentRecordID,
 		ParentObject:   opts.parentObject,
 		EntryValues:    values,
-	})
+	}
+	entryResult, err := executeEntryWrite(ctx, client, list, entryWrite, operation)
 	if err != nil {
-		return classifyEntryWriteError("add list entry", err)
+		return classifyEntryWriteError(entryWriteAction(operation), err)
 	}
 	entry := entryResult.Entry
 	result.Entry = &entry
@@ -160,6 +212,26 @@ func runEntriesAdd(cmd *cobra.Command, list string, opts entriesWriteOptions) er
 	result.Created = entryResult.Created
 
 	return printEntryWriteOutput(cmd.OutOrStdout(), opts.outputFormat, result)
+}
+
+func executeEntryWrite(ctx context.Context, client *attio.Client, list string, write attio.ListEntryWrite, operation entryWriteOperation) (*attio.ListEntryResult, error) {
+	switch operation {
+	case entryWriteOperationAdd:
+		return client.CreateListEntry(ctx, list, write)
+	case entryWriteOperationUpsert:
+		return client.AssertListEntry(ctx, list, write)
+	default:
+		return nil, fmt.Errorf("unsupported entry write operation %q", operation)
+	}
+}
+
+func entryWriteAction(operation entryWriteOperation) string {
+	switch operation {
+	case entryWriteOperationUpsert:
+		return "upsert list entry"
+	default:
+		return "add list entry"
+	}
 }
 
 func validateEntryWriteOptions(opts entriesWriteOptions) error {

@@ -92,6 +92,22 @@ func runRecordsCreate(cmd *cobra.Command, object string, opts recordsCreateOptio
 	ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
 	defer cancel()
 
+	metadata, err := loadRecordCreateMetadata(ctx, client, object)
+	if err != nil {
+		if isMetadataPermissionError(err) {
+			if _, warnErr := fmt.Fprintln(cmd.ErrOrStderr(), "Metadata unavailable; token needs object_configuration:read. Local validation and noun display skipped."); warnErr != nil {
+				return warnErr
+			}
+		} else {
+			return fmt.Errorf("could not fetch object metadata: %w", err)
+		}
+	} else {
+		result.Object = metadata.Object
+		if err := validateRecordCreateValues(values, metadata.Attributes); err != nil {
+			return err
+		}
+	}
+
 	record, err := client.CreateRecord(ctx, object, values)
 	if err != nil {
 		return fmt.Errorf("could not create record: %w", err)

@@ -29,7 +29,7 @@ After this sprint, a user can create a single Attio record from shell flags and 
   - Support `--set`, `--set-json`, `--dry-run`, and `--output table|json`.
   - Validation: command tests cover successful create, dry-run avoiding write endpoints, JSON output, table output, missing auth classification, and command help.
 
-- [ ] **Task 2.5**: Add metadata-aware validation for create when available
+- [x] **Task 2.5**: Add metadata-aware validation for create when available
   - Fetch object attributes before writes when possible.
   - Validate unknown attributes, required attributes, and writable/editable flags when metadata is available.
   - If metadata cannot be fetched because of missing scope, continue with explicit user-provided attributes and explain that local validation and noun display were skipped.

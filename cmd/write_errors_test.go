@@ -68,3 +68,63 @@ func TestClassifyRecordWriteTimeout(t *testing.T) {
 	assertErrorContains(t, err, "network timeout")
 	assertErrorContains(t, err, "create record")
 }
+
+func TestClassifyEntryWriteAPIErrorMessages(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		status     string
+		body       string
+		want       []string
+	}{
+		{
+			name:       "multiple match",
+			statusCode: http.StatusBadRequest,
+			status:     "400 Bad Request",
+			body:       `{"error":"MULTIPLE_MATCH_RESULTS: multiple list entries matched"}`,
+			want:       []string{"multiple list entries", "resolve duplicates", "400 Bad Request"},
+		},
+		{
+			name:       "duplicate",
+			statusCode: http.StatusConflict,
+			status:     "409 Conflict",
+			body:       `{"error":"DUPLICATE_VALUE: entry already exists"}`,
+			want:       []string{"duplicate list entry", "DUPLICATE_VALUE", "409 Conflict"},
+		},
+		{
+			name:       "validation",
+			statusCode: http.StatusUnprocessableEntity,
+			status:     "422 Unprocessable Entity",
+			body:       `{"error":"validation failed for entry_values.stage"}`,
+			want:       []string{"rejected the list-entry values", "entry_values.stage", "422 Unprocessable Entity"},
+		},
+		{
+			name:       "permission",
+			statusCode: http.StatusForbidden,
+			status:     "403 Forbidden",
+			body:       `{"error":"missing list_entry:read-write"}`,
+			want:       []string{"missing Attio list entry write scope", "list_entry:read-write", "403 Forbidden"},
+		},
+		{
+			name:       "rate limit",
+			statusCode: http.StatusTooManyRequests,
+			status:     "429 Too Many Requests",
+			body:       `{"error":"rate limit exceeded"}`,
+			want:       []string{"rate limit exceeded", "retry after a short delay", "429 Too Many Requests"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			apiErr := &attio.APIError{
+				StatusCode: tt.statusCode,
+				Status:     tt.status,
+				Body:       tt.body,
+			}
+			err := classifyEntryWriteError("upsert list entry", fmt.Errorf("assert list entry: %w", apiErr))
+			for _, want := range tt.want {
+				assertErrorContains(t, err, want)
+			}
+		})
+	}
+}

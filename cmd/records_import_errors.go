@@ -16,6 +16,12 @@ var importErrorColumns = []string{
 	"atcli_matching_attribute",
 	"atcli_status",
 	"atcli_errors",
+	"atcli_list",
+	"atcli_list_mode",
+	"atcli_record_status",
+	"atcli_record_id",
+	"atcli_entry_status",
+	"atcli_entry_id",
 }
 
 func writeImportErrorCSV(path string, document *importplan.CSVDocument, result importApplyResult) error {
@@ -72,6 +78,12 @@ func importErrorCSVRecord(document *importplan.CSVDocument, csvRow importplan.CS
 		resultRow.MatchingAttribute,
 		resultRow.Status,
 		strings.Join(resultRow.Errors, "; "),
+		resultRow.List,
+		resultRow.ListMode,
+		resultRow.RecordStatus,
+		resultRow.RecordID,
+		resultRow.EntryStatus,
+		resultRow.EntryID,
 	)
 	return record
 }

@@ -4,7 +4,7 @@
 After this sprint, a user can point the CLI at an agent-produced CSV and see a validated, row-by-row import plan without writing records.
 
 ## Tasks
-- [ ] **Task 4.1**: Add CSV loading and header validation
+- [x] **Task 4.1**: Add CSV loading and header validation
   - Read CSV files with headers.
   - Reject empty headers, duplicate headers, unreadable files, inconsistent row lengths, and empty files.
   - Preserve row numbers for error reporting.

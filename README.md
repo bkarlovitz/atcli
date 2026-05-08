@@ -42,6 +42,17 @@ Plan CSV imports without writing records:
   --output jsonl
 ```
 
+Apply CSV imports only after reviewing the plan. Upsert/assert mode is the default and is preferred for rerunnable imports:
+
+```bash
+./bin/atcli records import companies ./companies.csv \
+  --match domains \
+  --map 'Company Name=name' \
+  --map 'Domain=domains' \
+  --errors ./companies-errors.csv \
+  --apply
+```
+
 ## Documentation
 
 Start with [docs/README.md](docs/README.md).

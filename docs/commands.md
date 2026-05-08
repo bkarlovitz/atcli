@@ -279,7 +279,7 @@ Payload:
 
 ## `atcli records import <object> <csv>`
 
-Plans a CSV record import without writing records. This command is dry-run only: it never calls Attio record create or assert endpoints.
+Plans a CSV record import by default. Pass `--apply` to execute the same planned row payloads against Attio record write endpoints.
 
 Behavior:
 
@@ -292,13 +292,19 @@ Behavior:
 - Supports repeated `--set attr=value` and `--set-json attr=json` for static values added to every planned row.
 - Empty CSV cells are omitted and do not clear existing Attio values.
 - Supports `--multi-sep <sep>` to split cells for metadata-marked multivalue attributes.
-- Defaults to upsert planning. Use `--mode create` for create-only planning.
+- Defaults to upsert/assert mode. This is the preferred CSV mode because imports should be rerunnable: the same row should update the matched record instead of creating duplicates.
+- Use `--mode create` only when every run should create new records.
 - Uses the same safe matching defaults as `records upsert`: `companies` -> `domains`, `people` -> `email_addresses`, `users` -> `primary_email_address`, and `workspaces` -> `workspace_id`.
 - Requires explicit `--match` for custom objects, object IDs, `deals`, unknown slugs, and singular/plural variants without a safe default.
 - Fetches object attributes when credentials and `object_configuration:read` allow it.
 - When metadata is available, validates unknown attributes, writable/editable status, required values, matching attribute presence, and matching attribute uniqueness.
 - When metadata is unavailable, still plans explicit input when the match policy allows it and emits warnings that local validation was skipped.
-- Supports `--output table` and `--output jsonl`.
+- Supports `--output table` and `--output jsonl` for dry-run and apply modes.
+- Never calls record write endpoints unless `--apply` is present.
+- In apply mode, stops after the first row validation or write failure by default. Prior successful row results are still printed.
+- In apply mode, `--continue-on-error` keeps processing remaining rows after failed rows.
+- In apply mode, `--errors <csv>` writes failed input rows plus `atcli_row_number`, `atcli_mode`, `atcli_object`, `atcli_matching_attribute`, `atcli_status`, and `atcli_errors`. The file is not created when no rows fail.
+- Row errors redact the active token and sensitive environment values.
 
 Company import with header mapping:
 
@@ -329,7 +335,30 @@ Static values and JSON escape hatch:
   --set-json 'tags=["agent-import","reviewed"]'
 ```
 
-Agent-oriented JSONL output:
+Safe apply after reviewing the plan:
+
+```bash
+./bin/atcli records import companies ./companies.csv \
+  --match domains \
+  --map 'Company Name=name' \
+  --map 'Primary Domain=domains' \
+  --errors ./companies-errors.csv \
+  --apply
+```
+
+Continue after row failures and keep a correction file:
+
+```bash
+./bin/atcli records import people ./people.csv \
+  --match email_addresses \
+  --map 'Email=email_addresses' \
+  --map 'Full Name=name' \
+  --continue-on-error \
+  --errors ./people-errors.csv \
+  --apply
+```
+
+Agent-oriented dry-run JSONL output:
 
 ```bash
 ./bin/atcli records import people ./people.csv \
@@ -341,8 +370,27 @@ Agent-oriented JSONL output:
 
 Each JSONL line is one planned row with row number, mode, object, matching attribute, values, warnings, skipped empty cells, and validation status. Record IDs are not invented; the planner omits record identifiers unless a future lookup can prove them.
 
+Agent-oriented apply JSONL output:
+
+```bash
+./bin/atcli records import people ./people.csv \
+  --match email_addresses \
+  --map 'Email=email_addresses' \
+  --map 'Full Name=name' \
+  --continue-on-error \
+  --errors ./people-errors.csv \
+  --output jsonl \
+  --apply
+```
+
+Apply JSONL emits one `row` event per planned row and a final `summary` event. Row events include row number, mode, object, matching attribute, status, `write_endpoint_called`, sanitized errors, and `record_id` when Attio returned one. Summary events include planned, succeeded, failed, skipped, created, updated, elapsed milliseconds, and a machine-readable `records` array of row numbers and record IDs.
+
+Table apply output includes totals for planned, succeeded, failed, skipped, created, updated, elapsed time, and row-level status.
+
 Recommended import order:
 
 1. Import or plan linked parent objects first, usually `companies`.
-2. Review JSONL validation output for missing required values and match warnings.
-3. Import or plan linked child objects, usually `people`, after parent identifiers or unique match values are stable.
+2. Review dry-run table or JSONL validation output for missing required values and match warnings.
+3. Apply parent objects with upsert/assert mode.
+4. Correct any `--errors` CSV rows, then rerun the corrected data.
+5. Import or plan linked child objects, usually `people`, after parent identifiers or unique match values are stable.

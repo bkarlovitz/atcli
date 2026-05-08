@@ -11,6 +11,7 @@ Primary docs:
 - List attributes: https://docs.attio.com/rest-api/endpoint-reference/attributes/list-attributes
 - Create a record: https://docs.attio.com/rest-api/endpoint-reference/records/create-a-record
 - Assert a record: https://docs.attio.com/rest-api/endpoint-reference/records/assert-a-record
+- Rate limiting: https://docs.attio.com/rest-api/guides/rate-limiting
 - OAuth introspection: https://docs.attio.com/docs/oauth/introspect
 - Get workspace member: https://docs.attio.com/rest-api/endpoint-reference/workspace-members/get-a-workspace-member
 
@@ -325,19 +326,19 @@ Error behavior:
 - API error status and response bodies remain wrapped in the returned error for debugging.
 - The active bearer token is redacted from preserved API error bodies if an upstream response echoes it.
 
-## CSV Import Planning
+## CSV Import Planning and Apply
 
-`atcli records import <object> <csv>` is a local dry-run planner. It uses Attio metadata when available, but it does not call record write endpoints.
+`atcli records import <object> <csv>` is a local dry-run planner unless `--apply` is present. Apply mode reuses the planned row payloads and then calls Attio record write endpoints.
 
 Endpoints used when credentials/scopes allow metadata validation:
 
 - `GET /objects`
 - `GET /objects/{object}/attributes`
 
-Endpoints intentionally not used:
+Write endpoints used only when `--apply` is present:
 
-- `POST /objects/{object}/records`
-- `PUT /objects/{object}/records?matching_attribute={attribute}`
+- Create mode: `POST /objects/{object}/records`
+- Upsert/assert mode: `PUT /objects/{object}/records?matching_attribute={attribute}`
 
 CSV planning assumptions:
 
@@ -365,13 +366,41 @@ Supported first-pass conversions when attribute metadata is available:
 
 Matching behavior:
 
-- Import planning defaults to upsert mode.
-- Upsert mode uses the same safe match defaults as `records upsert`.
+- Import planning and apply default to upsert/assert mode.
+- Upsert/assert mode is preferred for CSV imports because corrected imports should be rerunnable without creating duplicate records.
+- Upsert/assert mode uses the same safe match defaults as `records upsert`.
 - Metadata validation checks that the matching attribute exists, is unique, and has a row value when metadata is available.
 - If metadata is blocked by missing `object_configuration:read`, planning can continue only when the match attribute was explicit; otherwise the user must pass `--match`.
 
+Apply behavior:
+
+- The command never calls record write endpoints unless `--apply` is present.
+- Apply mode writes rows sequentially and reports a result for each planned row.
+- By default, the command stops after the first failed row and marks remaining planned rows as skipped.
+- `--continue-on-error` keeps processing rows after validation or write failures.
+- `--errors <csv>` writes only failed input rows. It preserves original CSV columns and appends `atcli_row_number`, `atcli_mode`, `atcli_object`, `atcli_matching_attribute`, `atcli_status`, and `atcli_errors`.
+- Failed-row CSV files are not created when no rows fail.
+- Row errors are sanitized before table output, JSONL output, and failed-row CSV export.
+
+Apply output assumptions:
+
+- Table output includes planned, succeeded, failed, skipped, created, updated, elapsed milliseconds, and row-level statuses.
+- JSONL apply output emits one `row` event per planned row and one final `summary` event.
+- Row events include `record_id` when Attio returns `data.id.record_id`.
+- Summary events include machine-readable row-number to record-ID mappings for successful rows.
+- Created/updated counts are best-effort. They are incremented only when Attio returns `data.created` or an outcome/status/operation value that clearly says created or updated.
+
+Rate-limit and retry assumptions:
+
+- Attio documents HTTP `429` responses for rate limits and a `Retry-After` header that identifies when the limit resets.
+- atcli parses `Retry-After` as either delta seconds or an HTTP date.
+- When `Retry-After` is present, import apply sleeps for that row before retrying.
+- When `Retry-After` is absent or unparsable, import apply uses bounded exponential backoff starting at 100ms and capped at 2s.
+- Retries are row-scoped. A rate-limited row does not discard previously printed or accumulated successful row results.
+- If row retries are exhausted, that row is reported as failed and normal stop or continue-on-error behavior applies.
+
 Import order guidance:
 
-- Plan or import linked parent objects first, such as `companies`.
-- Then plan child objects, such as `people`, using stable unique values from the parent import.
-- Review JSONL row validation before enabling any future non-dry-run import flow.
+- Plan and apply linked parent objects first, such as `companies`.
+- Then plan and apply child objects, such as `people`, using stable unique values from the parent import.
+- Review dry-run JSONL row validation before using `--apply`.

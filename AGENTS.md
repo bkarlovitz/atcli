@@ -26,7 +26,7 @@ Current command surface:
 - Commands live in [cmd](cmd).
 - Attio REST helpers live in [internal/attio](internal/attio).
 - Auth storage and token introspection live in [internal/auth](internal/auth).
-- CSV import loading, mapping, conversion, and planning live in [internal/importplan](internal/importplan).
+- CSV import loading, mapping, conversion, and planning live in [internal/importplan](internal/importplan); apply execution and user-facing output live in [cmd](cmd).
 - Local binaries should be built into `bin/`; `bin/` is gitignored.
 
 ## Verification Commands
@@ -78,6 +78,8 @@ ATTIO_ACCESS_TOKEN='token' ./bin/atcli records create companies --set name='Exam
 ATTIO_ACCESS_TOKEN='token' ./bin/atcli records upsert companies --match domains --set name='Example Co' --set-json 'domains=["example.com"]' --dry-run
 ATTIO_ACCESS_TOKEN='token' ./bin/atcli records import companies ./companies.csv --match domains --output jsonl
 ```
+
+Only pass `--apply` to `records import` when intentionally writing workspace data. Prefer upsert/assert mode for CSV imports because corrected imports should be rerunnable without creating duplicates.
 
 Do not print real tokens in logs, docs, tests, or final responses.
 

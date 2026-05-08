@@ -11,12 +11,13 @@ import (
 const introspectURL = "https://app.attio.com/oauth/introspect"
 
 type Introspection struct {
-	Active        bool   `json:"active"`
-	Scope         string `json:"scope"`
-	TokenType     string `json:"token_type"`
-	WorkspaceID   string `json:"workspace_id"`
-	WorkspaceName string `json:"workspace_name"`
-	WorkspaceSlug string `json:"workspace_slug"`
+	Active                        bool   `json:"active"`
+	Scope                         string `json:"scope"`
+	TokenType                     string `json:"token_type"`
+	WorkspaceID                   string `json:"workspace_id"`
+	WorkspaceName                 string `json:"workspace_name"`
+	WorkspaceSlug                 string `json:"workspace_slug"`
+	AuthorizedByWorkspaceMemberID string `json:"authorized_by_workspace_member_id"`
 }
 
 func Introspect(ctx context.Context, token string) (*Introspection, error) {

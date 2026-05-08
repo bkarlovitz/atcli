@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -13,6 +14,9 @@ const (
 
 	envToken = "ATTIO_ACCESS_TOKEN"
 )
+
+var ErrNotAuthenticated = errors.New("not authenticated")
+var ErrCredentialStoreUnavailable = errors.New("credential store unavailable")
 
 func StoreToken(token string) error {
 	if err := keyring.Set(keyringService, keyringUser, token); err != nil {
@@ -28,7 +32,10 @@ func LoadToken() (string, error) {
 
 	token, err := keyring.Get(keyringService, keyringUser)
 	if err != nil {
-		return "", fmt.Errorf("load token from OS credential store: %w", err)
+		if errors.Is(err, keyring.ErrNotFound) {
+			return "", ErrNotAuthenticated
+		}
+		return "", fmt.Errorf("%w: %v", ErrCredentialStoreUnavailable, err)
 	}
 	return token, nil
 }

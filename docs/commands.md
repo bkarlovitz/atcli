@@ -148,3 +148,65 @@ Before creating records or planning CSV imports:
 ```
 
 Use the printed API slugs as CSV headers or later command arguments. Use list-entry attributes only for values that live on list entries; they are separate from the parent record's object attributes.
+
+## `atcli records create <object>`
+
+Creates one Attio record from shell flags.
+
+Behavior:
+
+- Treats `<object>` as an Attio object slug or ID. Standard object slugs are usually plural, such as `people` and `companies`.
+- Sends the object argument exactly as provided. It never singularizes or pluralizes the argument.
+- Parses repeated `--set attr=value` flags as string values.
+- Parses repeated `--set-json attr=json` flags as JSON values, including arrays, objects, numbers, booleans, and null.
+- Rejects malformed value flags, duplicate attribute names, empty attribute names, and malformed JSON before any API call.
+- For non-dry-run writes, loads `ATTIO_ACCESS_TOKEN` first, then falls back to the OS credential store.
+- Before writes, tries to fetch object and attribute metadata with `object_configuration:read`.
+- When metadata is available, validates unknown attributes, required writable attributes, and non-writable or non-editable attributes before calling the write endpoint.
+- When metadata is blocked by missing scope, prints a warning and still attempts the write with the explicit user-provided attributes. Local validation and noun display are skipped.
+- Uses Attio-provided `singular_noun` and `plural_noun` for output only when metadata is available.
+- Supports `--output table` and `--output json`.
+- Supports `--dry-run`, which prints the exact JSON payload that would be sent. Current dry runs do not require auth and do not call Attio metadata or write endpoints.
+
+Company examples:
+
+```bash
+./bin/atcli records create companies \
+  --set name='Example Co' \
+  --set-json 'domains=["example.com"]'
+
+./bin/atcli records create companies \
+  --set name='Example Co' \
+  --set-json 'domains=["example.com"]' \
+  --dry-run
+```
+
+People examples:
+
+```bash
+./bin/atcli records create people \
+  --set-json 'email_addresses=["ada@example.com"]' \
+  --set-json 'name=[{"first_name":"Ada","last_name":"Lovelace","full_name":"Ada Lovelace"}]'
+
+./bin/atcli records create people \
+  --set-json 'email_addresses=["ada@example.com"]' \
+  --set-json 'name=[{"first_name":"Ada","last_name":"Lovelace","full_name":"Ada Lovelace"}]' \
+  --output json
+```
+
+Dry-run output is the write payload, marked as a non-write:
+
+```text
+DRY RUN: no write endpoint called
+Payload:
+{
+  "data": {
+    "values": {
+      "domains": [
+        "example.com"
+      ],
+      "name": "Example Co"
+    }
+  }
+}
+```

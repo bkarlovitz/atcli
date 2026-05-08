@@ -9,6 +9,7 @@ Primary docs:
 - List objects: https://docs.attio.com/rest-api/endpoint-reference/objects/list-objects
 - List all lists: https://docs.attio.com/rest-api/endpoint-reference/lists/list-all-lists
 - List attributes: https://docs.attio.com/rest-api/endpoint-reference/attributes/list-attributes
+- Create a record: https://docs.attio.com/rest-api/endpoint-reference/records/create-a-record
 - OAuth introspection: https://docs.attio.com/docs/oauth/introspect
 - Get workspace member: https://docs.attio.com/rest-api/endpoint-reference/workspace-members/get-a-workspace-member
 
@@ -173,3 +174,69 @@ Archived behavior:
 
 - Attribute commands hide archived attributes by default.
 - Attribute commands request and display archived attributes with `--all`.
+
+## Record Create
+
+Endpoint:
+
+```http
+POST https://api.attio.com/v2/objects/{object}/records
+```
+
+Used by:
+
+- `atcli records create <object>` to create one record from shell flags.
+
+Path parameters:
+
+- `object`: Attio object UUID or API slug. atcli passes the user's `<object>` argument through unchanged. Standard slugs are usually plural, such as `people` and `companies`.
+
+Required scopes in Attio's docs:
+
+- `record_permission:read-write`
+- `object_configuration:read`
+
+Payload shape:
+
+```json
+{
+  "data": {
+    "values": {
+      "attribute_api_slug_or_id": "value"
+    }
+  }
+}
+```
+
+Command flag mapping:
+
+- `--set attr=value` adds a string value under `data.values[attr]`.
+- `--set-json attr=json` adds a decoded JSON value under `data.values[attr]`.
+- Duplicate attributes across both flag types are rejected locally.
+
+Fields currently modeled from successful responses:
+
+- `data.id.workspace_id`
+- `data.id.object_id`
+- `data.id.record_id`
+- `data.created_at`
+- `data.web_url`
+- `data.values`
+
+Metadata behavior before writes:
+
+- atcli tries to call `GET /objects` and `GET /objects/{object}/attributes` before non-dry-run creates.
+- When metadata is available, output uses Attio's returned `singular_noun` and `plural_noun`, and create input is checked against returned attribute `api_slug`, `is_writable`, `is_editable`, and `is_required`.
+- If metadata calls fail with a permission error, atcli warns that local validation and noun display were skipped, then still attempts the create request with the explicit user-provided values.
+- Non-permission metadata errors stop the command before the write.
+
+Dry-run behavior:
+
+- `--dry-run` prints the exact JSON payload shape atcli would send to the create endpoint.
+- It marks `write_endpoint_called` as false in JSON output or prints `DRY RUN: no write endpoint called` in table output.
+- It does not load credentials, fetch metadata, or call Attio endpoints.
+
+Error behavior:
+
+- API error status and response bodies are preserved for validation, permission, and rate-limit responses.
+- The active bearer token is redacted from preserved API error bodies if an upstream response echoes it.

@@ -14,6 +14,7 @@ Current command surface:
 - `atcli objects attributes`
 - `atcli lists list`
 - `atcli lists attributes`
+- `atcli records create`
 
 ## Fast Context
 
@@ -47,6 +48,8 @@ For command wiring:
 ./bin/atcli lists --help
 ./bin/atcli lists list --help
 ./bin/atcli lists attributes --help
+./bin/atcli records --help
+./bin/atcli records create --help
 ```
 
 For live Attio testing, prefer:
@@ -61,6 +64,12 @@ For live schema discovery testing, prefer read-only commands:
 ATTIO_ACCESS_TOKEN='token' ./bin/atcli objects list
 ATTIO_ACCESS_TOKEN='token' ./bin/atcli objects attributes people
 ATTIO_ACCESS_TOKEN='token' ./bin/atcli lists list
+```
+
+For record create testing, prefer dry runs unless intentionally creating workspace data:
+
+```bash
+ATTIO_ACCESS_TOKEN='token' ./bin/atcli records create companies --set name='Example Co' --set-json 'domains=["example.com"]' --dry-run
 ```
 
 Do not print real tokens in logs, docs, tests, or final responses.

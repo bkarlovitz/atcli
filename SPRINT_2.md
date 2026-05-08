@@ -35,7 +35,7 @@ After this sprint, a user can create a single Attio record from shell flags and 
   - If metadata cannot be fetched because of missing scope, continue with explicit user-provided attributes and explain that local validation and noun display were skipped.
   - Validation: command tests cover metadata success, metadata permission failure fallback, required attribute errors, unknown attribute errors, and non-writable attribute errors.
 
-- [ ] **Task 2.6**: Document one-off create
+- [x] **Task 2.6**: Document one-off create
   - Update `docs/commands.md` with examples for creating `companies` and `people` records.
   - Update `docs/attio-api.md` with the create record endpoint, payload shape, scope notes, and dry-run behavior.
   - Document that `<object>` means Attio slug/ID and that display nouns come only from Attio metadata.

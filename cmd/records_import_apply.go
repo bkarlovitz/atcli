@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -20,6 +21,10 @@ const maxImportRateLimitRetries = 3
 
 var importRateLimitSleep = sleepForImportRateLimit
 
+type importExecutionOptions struct {
+	ContinueOnError bool
+}
+
 type importApplyResult struct {
 	ObjectIdentifier string
 	Mode             string
@@ -28,6 +33,7 @@ type importApplyResult struct {
 	Planned          int
 	Succeeded        int
 	Failed           int
+	Skipped          int
 	Created          int
 	Updated          int
 	Elapsed          time.Duration
@@ -45,7 +51,7 @@ type importApplyRowResult struct {
 	Errors            []string
 }
 
-func executeImportPlan(ctx context.Context, client *attio.Client, plan *importplan.ImportPlan) importApplyResult {
+func executeImportPlan(ctx context.Context, client *attio.Client, plan *importplan.ImportPlan, opts importExecutionOptions) importApplyResult {
 	started := time.Now()
 	result := importApplyResult{
 		ObjectIdentifier: plan.ObjectIdentifier,
@@ -55,7 +61,7 @@ func executeImportPlan(ctx context.Context, client *attio.Client, plan *importpl
 		Rows:             make([]importApplyRowResult, 0, len(plan.Rows)),
 	}
 
-	for _, row := range plan.Rows {
+	for i, row := range plan.Rows {
 		rowResult := importApplyRowResult{
 			RowNumber:         row.RowNumber,
 			Mode:              row.Mode,
@@ -65,16 +71,24 @@ func executeImportPlan(ctx context.Context, client *attio.Client, plan *importpl
 
 		if !row.Valid {
 			rowResult.Status = "failed"
-			rowResult.Errors = append([]string(nil), row.Errors...)
+			rowResult.Errors = sanitizeImportErrors(row.Errors)
 			result.recordRow(rowResult)
+			if !opts.ContinueOnError {
+				result.recordSkippedRows(plan, i+1, row.RowNumber)
+				break
+			}
 			continue
 		}
 
 		record, outcome, created, err := executeImportRow(ctx, client, plan, row)
 		if err != nil {
 			rowResult.Status = "failed"
-			rowResult.Errors = []string{classifyRecordWriteError(fmt.Sprintf("import row %d", row.RowNumber), err).Error()}
+			rowResult.Errors = []string{sanitizeImportErrorText(classifyRecordWriteError(fmt.Sprintf("import row %d", row.RowNumber), err).Error())}
 			result.recordRow(rowResult)
+			if !opts.ContinueOnError {
+				result.recordSkippedRows(plan, i+1, row.RowNumber)
+				break
+			}
 			continue
 		}
 
@@ -178,6 +192,8 @@ func (r *importApplyResult) recordRow(row importApplyRowResult) {
 	switch row.Status {
 	case "failed":
 		r.Failed++
+	case "skipped":
+		r.Skipped++
 	case "created":
 		r.Succeeded++
 		r.Created++
@@ -186,6 +202,19 @@ func (r *importApplyResult) recordRow(row importApplyRowResult) {
 		r.Updated++
 	default:
 		r.Succeeded++
+	}
+}
+
+func (r *importApplyResult) recordSkippedRows(plan *importplan.ImportPlan, start int, failedRowNumber int) {
+	for _, row := range plan.Rows[start:] {
+		r.recordRow(importApplyRowResult{
+			RowNumber:         row.RowNumber,
+			Mode:              row.Mode,
+			Object:            plan.ObjectIdentifier,
+			MatchingAttribute: plan.MatchAttribute,
+			Status:            "skipped",
+			Errors:            []string{fmt.Sprintf("skipped after row %d failed", failedRowNumber)},
+		})
 	}
 }
 
@@ -294,4 +323,44 @@ type importApplyRowEvent struct {
 	Outcome           string   `json:"outcome,omitempty"`
 	Created           *bool    `json:"created,omitempty"`
 	Errors            []string `json:"errors,omitempty"`
+}
+
+func sanitizeImportErrors(errors []string) []string {
+	if len(errors) == 0 {
+		return nil
+	}
+	sanitized := make([]string, 0, len(errors))
+	for _, err := range errors {
+		sanitized = append(sanitized, sanitizeImportErrorText(err))
+	}
+	return sanitized
+}
+
+func sanitizeImportErrorText(text string) string {
+	for _, secret := range sensitiveEnvironmentValues() {
+		text = strings.ReplaceAll(text, secret, "[redacted]")
+	}
+	return text
+}
+
+func sensitiveEnvironmentValues() []string {
+	values := make([]string, 0)
+	for _, env := range os.Environ() {
+		name, value, ok := strings.Cut(env, "=")
+		if !ok || !isSensitiveEnvironmentName(name) || len(value) < 4 {
+			continue
+		}
+		values = append(values, value)
+	}
+	return values
+}
+
+func isSensitiveEnvironmentName(name string) bool {
+	name = strings.ToUpper(name)
+	for _, marker := range []string{"TOKEN", "SECRET", "PASSWORD", "PASS", "KEY", "CREDENTIAL"} {
+		if strings.Contains(name, marker) {
+			return true
+		}
+	}
+	return false
 }

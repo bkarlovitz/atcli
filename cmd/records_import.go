@@ -16,15 +16,16 @@ import (
 )
 
 type recordsImportOptions struct {
-	setValues      []string
-	setJSONValues  []string
-	mapValues      []string
-	ignoreColumns  []string
-	apply          bool
-	mode           string
-	outputFormat   string
-	matchAttribute string
-	multiSeparator string
+	setValues       []string
+	setJSONValues   []string
+	mapValues       []string
+	ignoreColumns   []string
+	apply           bool
+	continueOnError bool
+	mode            string
+	outputFormat    string
+	matchAttribute  string
+	multiSeparator  string
 }
 
 func newRecordsImportCommand() *cobra.Command {
@@ -59,6 +60,7 @@ Attio attributes and --ignore to leave a CSV column out of the planned payload.
 	importCmd.Flags().StringArrayVar(&opts.mapValues, "map", nil, "map a CSV column to an Attio attribute (csv_column=attio_attribute)")
 	importCmd.Flags().StringArrayVar(&opts.ignoreColumns, "ignore", nil, "ignore a CSV column")
 	importCmd.Flags().BoolVar(&opts.apply, "apply", false, "execute the planned import and write records")
+	importCmd.Flags().BoolVar(&opts.continueOnError, "continue-on-error", false, "keep applying remaining rows after a row validation or write failure")
 	importCmd.Flags().StringVar(&opts.mode, "mode", importplan.ModeUpsert, "planning mode: upsert or create")
 	importCmd.Flags().StringVar(&opts.outputFormat, "output", outputFormatTable, "output format: table or jsonl")
 	importCmd.Flags().StringVar(&opts.matchAttribute, "match", "", "unique attribute slug or ID to match existing records in upsert mode")
@@ -88,7 +90,9 @@ func runRecordsImport(cmd *cobra.Command, object, csvPath string, opts recordsIm
 	if err != nil {
 		return err
 	}
-	result := executeImportPlan(cmd.Context(), client, plan)
+	result := executeImportPlan(cmd.Context(), client, plan, importExecutionOptions{
+		ContinueOnError: opts.continueOnError,
+	})
 	if err := printImportApplyOutput(cmd.OutOrStdout(), opts.outputFormat, result); err != nil {
 		return err
 	}

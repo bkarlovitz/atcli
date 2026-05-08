@@ -263,6 +263,150 @@ func TestRecordsImportApplyRateLimitExhaustionReportsFailure(t *testing.T) {
 	assertContains(t, output, "Rows: 2 (succeeded: 1, failed: 1, created: 0, updated: 1)")
 }
 
+func TestRecordsImportApplyStopsAfterWriteFailureByDefault(t *testing.T) {
+	csvPath := writeImportCSV(t, "stop-on-write-failure.csv", "email_addresses,name\nada@example.com,Ada Lovelace\nbad@example.com,Bad Row\nthird@example.com,Third Row\n")
+	attemptsByEmail := map[string]int{}
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"people"}]}`))
+			return
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","type":"email-address","is_writable":true,"is_unique":true},{"api_slug":"name","type":"personal-name","is_writable":true}]}`))
+			return
+		case "/objects/people/records":
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+
+		email := decodeImportRequestEmail(t, r)
+		attemptsByEmail[email]++
+		switch email {
+		case "ada@example.com":
+			_, _ = w.Write([]byte(`{"data":{"id":{"record_id":"record-ada"},"status":"updated","created":false}}`))
+		case "bad@example.com":
+			http.Error(w, `{"error":"invalid row"}`, http.StatusUnprocessableEntity)
+		case "third@example.com":
+			t.Fatal("third row should not be written after default stop-on-error")
+		default:
+			t.Fatalf("unexpected email %q", email)
+		}
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--apply")
+	if err == nil {
+		t.Fatalf("expected apply failure, got nil\n%s", output)
+	}
+	if attemptsByEmail["ada@example.com"] != 1 || attemptsByEmail["bad@example.com"] != 1 || attemptsByEmail["third@example.com"] != 0 {
+		t.Fatalf("unexpected attempts by email: %#v", attemptsByEmail)
+	}
+	assertContains(t, output, "record-ada")
+	assertContains(t, output, "failed")
+	assertContains(t, output, "skipped after row 3 failed")
+	assertNotContains(t, output, "record-third")
+}
+
+func TestRecordsImportApplyContinueOnErrorProcessesWriteFailures(t *testing.T) {
+	csvPath := writeImportCSV(t, "continue-write-failure.csv", "email_addresses,name\nada@example.com,Ada Lovelace\nbad@example.com,Bad Row\nthird@example.com,Third Row\n")
+	attemptsByEmail := map[string]int{}
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"people"}]}`))
+			return
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","type":"email-address","is_writable":true,"is_unique":true},{"api_slug":"name","type":"personal-name","is_writable":true}]}`))
+			return
+		case "/objects/people/records":
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+
+		email := decodeImportRequestEmail(t, r)
+		attemptsByEmail[email]++
+		switch email {
+		case "ada@example.com":
+			_, _ = w.Write([]byte(`{"data":{"id":{"record_id":"record-ada"},"status":"updated","created":false}}`))
+		case "bad@example.com":
+			http.Error(w, `{"error":"invalid row"}`, http.StatusUnprocessableEntity)
+		case "third@example.com":
+			_, _ = w.Write([]byte(`{"data":{"id":{"record_id":"record-third"},"status":"created","created":true}}`))
+		default:
+			t.Fatalf("unexpected email %q", email)
+		}
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--apply", "--continue-on-error")
+	if err == nil {
+		t.Fatalf("expected apply failure, got nil\n%s", output)
+	}
+	if attemptsByEmail["ada@example.com"] != 1 || attemptsByEmail["bad@example.com"] != 1 || attemptsByEmail["third@example.com"] != 1 {
+		t.Fatalf("unexpected attempts by email: %#v", attemptsByEmail)
+	}
+	assertContains(t, output, "record-ada")
+	assertContains(t, output, "record-third")
+	assertContains(t, output, "failed")
+	assertNotContains(t, output, "skipped after")
+}
+
+func TestRecordsImportApplyContinueOnErrorProcessesRowsAfterValidationFailure(t *testing.T) {
+	csvPath := writeImportCSV(t, "continue-validation-failure.csv", "email_addresses,name\nada@example.com,\ncharles@example.com,Charles Babbage\n")
+	writeCount := 0
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"people"}]}`))
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","type":"email-address","is_writable":true,"is_unique":true},{"api_slug":"name","type":"personal-name","is_writable":true,"is_required":true}]}`))
+		case "/objects/people/records":
+			writeCount++
+			email := decodeImportRequestEmail(t, r)
+			if email != "charles@example.com" {
+				t.Fatalf("expected only second row write, got %q", email)
+			}
+			_, _ = w.Write([]byte(`{"data":{"id":{"record_id":"record-charles"},"status":"created","created":true}}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--apply", "--continue-on-error")
+	if err == nil {
+		t.Fatalf("expected apply failure, got nil\n%s", output)
+	}
+	if writeCount != 1 {
+		t.Fatalf("expected one write after validation failure, got %d", writeCount)
+	}
+	assertContains(t, output, `missing required attribute "name"`)
+	assertContains(t, output, "record-charles")
+}
+
+func TestRecordsImportApplySanitizesRowErrors(t *testing.T) {
+	t.Setenv("API_SECRET", "leaked-secret-value")
+	csvPath := writeImportCSV(t, "sanitized-error.csv", "email_addresses,name\nada@example.com,Ada Lovelace\n")
+	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/objects":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"people"}]}`))
+		case "/objects/people/attributes":
+			_, _ = w.Write([]byte(`{"data":[{"api_slug":"email_addresses","type":"email-address","is_writable":true,"is_unique":true},{"api_slug":"name","type":"personal-name","is_writable":true}]}`))
+		case "/objects/people/records":
+			http.Error(w, `{"error":"bad value leaked-secret-value test-token"}`, http.StatusUnprocessableEntity)
+		default:
+			t.Fatalf("unexpected path %s", r.URL.String())
+		}
+	}))
+
+	output, err := executeTestCommand(t, newRecordsCommand(), "import", "people", csvPath, "--apply")
+	if err == nil {
+		t.Fatalf("expected apply failure, got nil\n%s", output)
+	}
+	assertContains(t, output, "[redacted]")
+	assertNotContains(t, output, "leaked-secret-value")
+	assertNotContains(t, output, "test-token")
+	assertNotContains(t, err.Error(), "leaked-secret-value")
+}
+
 func TestRecordsImportApplyReusesPlanValidationBeforeWrites(t *testing.T) {
 	csvPath := writeImportCSV(t, "invalid-apply.csv", "email_addresses,name\nada@example.com,\n")
 	writeCalled := false
@@ -504,6 +648,7 @@ func TestRecordsImportHelp(t *testing.T) {
 		"--map",
 		"--ignore",
 		"--apply",
+		"--continue-on-error",
 		"--set",
 		"--set-json",
 		"--mode",
@@ -540,6 +685,20 @@ func writeImportCSV(t *testing.T, name, contents string) string {
 		t.Fatalf("write import CSV fixture: %v", err)
 	}
 	return path
+}
+
+func decodeImportRequestEmail(t *testing.T, r *http.Request) string {
+	t.Helper()
+	var payload struct {
+		Data struct {
+			Values map[string]any `json:"values"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	email, _ := payload.Data.Values["email_addresses"].(string)
+	return email
 }
 
 func captureImportRateLimitSleeps(t *testing.T) *[]time.Duration {

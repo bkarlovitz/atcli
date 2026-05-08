@@ -32,6 +32,16 @@ Use dry runs for one-off record writes until the payload looks right:
   --dry-run
 ```
 
+Add a returned record to a list as a list entry:
+
+```bash
+./bin/atcli entries upsert sales \
+  --parent-object people \
+  --parent-record-id record_123 \
+  --set stage='Qualified' \
+  --dry-run
+```
+
 Plan CSV imports without writing records:
 
 ```bash
@@ -50,6 +60,19 @@ Apply CSV imports only after reviewing the plan. Upsert/assert mode is the defau
   --map 'Company Name=name' \
   --map 'Domain=domains' \
   --errors ./companies-errors.csv \
+  --apply
+```
+
+CSV imports can also add each successfully written record to a list:
+
+```bash
+./bin/atcli records import people ./people.csv \
+  --match email_addresses \
+  --map 'Email=email_addresses' \
+  --map 'Full Name=name' \
+  --list sales \
+  --entry-map 'Pipeline Stage=stage' \
+  --errors ./people-errors.csv \
   --apply
 ```
 

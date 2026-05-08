@@ -277,6 +277,58 @@ Payload:
 }
 ```
 
+## `atcli entries add <list>`
+
+Adds one existing Attio record to a list.
+
+Behavior:
+
+- Treats `<list>` and `--parent-object` as Attio slugs or IDs.
+- Requires `--parent-object <object>` and `--parent-record-id <id>`.
+- Parses repeated `--set attr=value` flags as string list-entry values.
+- Parses repeated `--set-json attr=json` flags as decoded JSON list-entry values.
+- Before non-dry-run writes, tries to fetch list, parent object, and list-entry attribute metadata.
+- When metadata is available, validates list-entry attributes and confirms the list accepts the parent object.
+- When metadata is blocked by missing scopes, warns and still attempts the explicit write. Local validation, parent compatibility validation, and noun display are skipped.
+- Supports `--output table` and `--output json`.
+- Supports `--dry-run`, which prints the create-entry payload and does not require auth.
+
+Examples:
+
+```bash
+./bin/atcli entries add sales \
+  --parent-object people \
+  --parent-record-id record_123 \
+  --set stage='Qualified'
+
+./bin/atcli entries add sales \
+  --parent-object people \
+  --parent-record-id record_123 \
+  --set-json 'stage=["Qualified"]' \
+  --dry-run
+```
+
+## `atcli entries upsert <list>`
+
+Creates or updates one Attio list entry for an existing parent record. Use this when rerunning the same command should update the list entry for the same parent record instead of creating duplicates.
+
+Behavior:
+
+- Uses Attio's list-entry assert-by-parent behavior.
+- Requires the same parent flags and supports the same value/output flags as `entries add`.
+- Validates list-entry attributes and parent object compatibility when metadata is available.
+- Falls back on explicit inputs when metadata is unavailable because of missing scopes.
+
+Example:
+
+```bash
+./bin/atcli entries upsert sales \
+  --parent-object people \
+  --parent-record-id record_123 \
+  --set stage='Qualified' \
+  --output json
+```
+
 ## `atcli records import <object> <csv>`
 
 Plans a CSV record import by default. Pass `--apply` to execute the same planned row payloads against Attio record write endpoints.
@@ -290,6 +342,10 @@ Behavior:
 - Supports repeated `--map csv_column=attio_attribute` for agent-friendly CSV headers.
 - Supports repeated `--ignore csv_column` to leave columns out of the planned payload.
 - Supports repeated `--set attr=value` and `--set-json attr=json` for static values added to every planned row.
+- Supports `--list <list>` to add each successfully written record to an Attio list after the record write.
+- Supports `--list-mode create|upsert`; the default is `upsert` for rerunnable imports.
+- Supports repeated `--entry-map csv_column=list_attribute` for CSV columns that should become list-entry values instead of record values.
+- Supports repeated `--entry-set attr=value` for static list-entry string values added to every entry write.
 - Empty CSV cells are omitted and do not clear existing Attio values.
 - Supports `--multi-sep <sep>` to split cells for metadata-marked multivalue attributes.
 - Defaults to upsert/assert mode. This is the preferred CSV mode because imports should be rerunnable: the same row should update the matched record instead of creating duplicates.
@@ -303,7 +359,11 @@ Behavior:
 - Never calls record write endpoints unless `--apply` is present.
 - In apply mode, stops after the first row validation or write failure by default. Prior successful row results are still printed.
 - In apply mode, `--continue-on-error` keeps processing remaining rows after failed rows.
-- In apply mode, `--errors <csv>` writes failed input rows plus `atcli_row_number`, `atcli_mode`, `atcli_object`, `atcli_matching_attribute`, `atcli_status`, and `atcli_errors`. The file is not created when no rows fail.
+- When `--list` is set and metadata is available, validates that the list parent object matches the import object and that entry values target writable list-entry attributes.
+- When list metadata is unavailable, still plans explicit entry values and warns that local list-entry validation was skipped.
+- In apply mode with `--list`, a record write failure skips that row's list-entry write and reports an entry status of `skipped`.
+- In apply mode with `--list`, a list-entry write failure keeps the returned record ID/status and reports the row as failed with entry failure details.
+- In apply mode, `--errors <csv>` writes failed input rows plus `atcli_row_number`, `atcli_mode`, `atcli_object`, `atcli_matching_attribute`, `atcli_status`, `atcli_errors`, and when relevant, list, record-status, record-ID, entry-status, and entry-ID fields. The file is not created when no rows fail.
 - Row errors redact the active token and sensitive environment values.
 
 Company import with header mapping:
@@ -358,6 +418,20 @@ Continue after row failures and keep a correction file:
   --apply
 ```
 
+Import records and add each returned record to a list:
+
+```bash
+./bin/atcli records import people ./people.csv \
+  --match email_addresses \
+  --map 'Email=email_addresses' \
+  --map 'Full Name=name' \
+  --list sales \
+  --entry-map 'Pipeline Stage=stage' \
+  --entry-set source=csv \
+  --errors ./people-errors.csv \
+  --apply
+```
+
 Agent-oriented dry-run JSONL output:
 
 ```bash
@@ -383,7 +457,7 @@ Agent-oriented apply JSONL output:
   --apply
 ```
 
-Apply JSONL emits one `row` event per planned row and a final `summary` event. Row events include row number, mode, object, matching attribute, status, `write_endpoint_called`, sanitized errors, and `record_id` when Attio returned one. Summary events include planned, succeeded, failed, skipped, created, updated, elapsed milliseconds, and a machine-readable `records` array of row numbers and record IDs.
+Apply JSONL emits one `row` event per planned row and a final `summary` event. Row events include row number, mode, object, matching attribute, status, `write_endpoint_called`, sanitized errors, and `record_id` when Attio returned one. When `--list` is set, row events also include `list`, `list_mode`, `record_status`, `entry_status`, entry write markers, and `entry_id` when Attio returned one. Summary events include planned, succeeded, failed, skipped, created, updated, elapsed milliseconds, and a machine-readable `records` array of row numbers and record IDs.
 
 Table apply output includes totals for planned, succeeded, failed, skipped, created, updated, elapsed time, and row-level status.
 

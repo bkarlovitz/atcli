@@ -11,6 +11,8 @@ Primary docs:
 - List attributes: https://docs.attio.com/rest-api/endpoint-reference/attributes/list-attributes
 - Create a record: https://docs.attio.com/rest-api/endpoint-reference/records/create-a-record
 - Assert a record: https://docs.attio.com/rest-api/endpoint-reference/records/assert-a-record
+- Create a list entry: https://docs.attio.com/rest-api/endpoint-reference/entries/create-an-entry-add-record-to-list
+- Assert a list entry by parent: https://docs.attio.com/rest-api/endpoint-reference/entries/assert-a-list-entry-by-parent
 - Rate limiting: https://docs.attio.com/rest-api/guides/rate-limiting
 - OAuth introspection: https://docs.attio.com/docs/oauth/introspect
 - Get workspace member: https://docs.attio.com/rest-api/endpoint-reference/workspace-members/get-a-workspace-member
@@ -326,19 +328,125 @@ Error behavior:
 - API error status and response bodies remain wrapped in the returned error for debugging.
 - The active bearer token is redacted from preserved API error bodies if an upstream response echoes it.
 
+## List Entry Create
+
+Endpoint:
+
+```http
+POST https://api.attio.com/v2/lists/{list}/entries
+```
+
+Used by:
+
+- `atcli entries add <list>` to add one existing record to a list.
+- `atcli records import --list <list> --list-mode create` after each successful record write.
+
+Path parameters:
+
+- `list`: Attio list UUID or API slug. atcli passes the user's list argument through unchanged.
+
+Required scopes in Attio's docs:
+
+- `list_entry:read-write`
+- `list_configuration:read`
+
+Payload shape:
+
+```json
+{
+  "data": {
+    "parent_record_id": "record-id",
+    "parent_object": "people",
+    "entry_values": {
+      "list_attribute_api_slug_or_id": "value"
+    }
+  }
+}
+```
+
+Semantics:
+
+- List entries point at parent records; they are not records themselves.
+- `parent_object` is the object slug or ID for the parent record.
+- `parent_record_id` must be the returned record ID for the parent record.
+- `entry_values` are list-entry attributes, not object attributes. A list entry can have values such as pipeline stage or list-specific source while the parent record keeps object values such as name and email.
+- Attio allows multiple list entries for the same parent record when using create. Unique list-entry attributes can still produce duplicate/conflict errors.
+
+Fields currently modeled from successful responses:
+
+- `data.id.workspace_id`
+- `data.id.list_id`
+- `data.id.entry_id`
+- `data.parent_record_id`
+- `data.parent_object`
+- `data.created_at`
+- `data.entry_values`
+- `data.status`, `data.outcome`, or `data.operation` when Attio reports create/update outcome
+- `data.created` when Attio reports a boolean create/update marker
+
+Metadata behavior:
+
+- atcli tries to call `GET /lists`, `GET /objects`, and `GET /lists/{list}/attributes` before non-dry-run one-off entry writes and import planning with `--list`.
+- When metadata is available, atcli validates writable list-entry attributes and checks that the list's `parent_object` accepts the requested/imported parent object.
+- If metadata calls fail with a permission error, atcli warns and still attempts explicit writes without local list-entry validation, parent compatibility validation, or noun display.
+
+## List Entry Assert By Parent
+
+Endpoint:
+
+```http
+PUT https://api.attio.com/v2/lists/{list}/entries
+```
+
+Used by:
+
+- `atcli entries upsert <list>` to create or update the list entry for a parent record.
+- `atcli records import --list <list>` by default, because `--list-mode upsert` is the default.
+
+Payload shape:
+
+```json
+{
+  "data": {
+    "parent_record_id": "record-id",
+    "parent_object": "people",
+    "entry_values": {
+      "list_attribute_api_slug_or_id": "value"
+    }
+  }
+}
+```
+
+Semantics:
+
+- If exactly one entry exists for the parent record, Attio updates it.
+- If no entry exists for the parent record, Attio creates it.
+- If multiple entries exist for the same parent record, Attio reports `MULTIPLE_MATCH_RESULTS`; atcli surfaces this as a duplicate-resolution failure.
+- This assert behavior is preferred for rerunnable imports that should not create duplicate list entries for corrected rows.
+
+Error behavior:
+
+- Command-facing errors normalize missing auth, missing `list_entry:read-write`, validation failures, duplicate entry/unique conflicts, multiple-match failures, rate limits, and network timeouts.
+- API error status and response bodies remain wrapped in the returned error for debugging.
+- The active bearer token is redacted from preserved API error bodies if an upstream response echoes it.
+
 ## CSV Import Planning and Apply
 
-`atcli records import <object> <csv>` is a local dry-run planner unless `--apply` is present. Apply mode reuses the planned row payloads and then calls Attio record write endpoints.
+`atcli records import <object> <csv>` is a local dry-run planner unless `--apply` is present. Apply mode reuses the planned row payloads and then calls Attio record write endpoints. When `--list` is present, apply mode writes a list entry after each successful record write.
 
 Endpoints used when credentials/scopes allow metadata validation:
 
 - `GET /objects`
 - `GET /objects/{object}/attributes`
+- `GET /lists` when `--list` is present
+- `GET /lists/{list}/attributes` when `--list` is present
 
 Write endpoints used only when `--apply` is present:
 
 - Create mode: `POST /objects/{object}/records`
 - Upsert/assert mode: `PUT /objects/{object}/records?matching_attribute={attribute}`
+- List create mode: `POST /lists/{list}/entries`
+- List upsert/assert mode: `PUT /lists/{list}/entries`
 
 CSV planning assumptions:
 
@@ -346,6 +454,10 @@ CSV planning assumptions:
 - `--map csv_column=attio_attribute` changes the target attribute for a CSV column.
 - `--ignore csv_column` removes a CSV column from the planned payload.
 - `--set attr=value` and `--set-json attr=json` add static values to every planned row.
+- `--list list` enables list-entry planning and apply after record writes.
+- `--list-mode create|upsert` controls list-entry writes. The default is `upsert`.
+- `--entry-map csv_column=list_attribute` maps a CSV column to a list-entry attribute and removes that CSV column from the record payload.
+- `--entry-set attr=value` adds a static string list-entry value to every planned entry.
 - Duplicate target attributes and conflicts between mapped and static attributes are rejected locally.
 - Empty CSV cells are omitted from the planned values. They do not clear existing Attio values.
 - Explicit clearing is intentionally deferred to a future command or flag.
@@ -378,7 +490,9 @@ Apply behavior:
 - Apply mode writes rows sequentially and reports a result for each planned row.
 - By default, the command stops after the first failed row and marks remaining planned rows as skipped.
 - `--continue-on-error` keeps processing rows after validation or write failures.
-- `--errors <csv>` writes only failed input rows. It preserves original CSV columns and appends `atcli_row_number`, `atcli_mode`, `atcli_object`, `atcli_matching_attribute`, `atcli_status`, and `atcli_errors`.
+- If a record write fails, the corresponding list-entry write is skipped and the row is reported as a record failure.
+- If a list-entry write fails after a record write succeeds, the record ID/status are retained, the row is reported as failed, and the entry status/error describe the list-entry failure.
+- `--errors <csv>` writes only failed input rows. It preserves original CSV columns and appends `atcli_row_number`, `atcli_mode`, `atcli_object`, `atcli_matching_attribute`, `atcli_status`, `atcli_errors`, `atcli_list`, `atcli_list_mode`, `atcli_record_status`, `atcli_record_id`, `atcli_entry_status`, and `atcli_entry_id`.
 - Failed-row CSV files are not created when no rows fail.
 - Row errors are sanitized before table output, JSONL output, and failed-row CSV export.
 
@@ -387,6 +501,7 @@ Apply output assumptions:
 - Table output includes planned, succeeded, failed, skipped, created, updated, elapsed milliseconds, and row-level statuses.
 - JSONL apply output emits one `row` event per planned row and one final `summary` event.
 - Row events include `record_id` when Attio returns `data.id.record_id`.
+- When `--list` is present, row events include `list`, `list_mode`, `record_status`, `entry_status`, `entry_id` when available, and separate record/entry write endpoint markers.
 - Summary events include machine-readable row-number to record-ID mappings for successful rows.
 - Created/updated counts are best-effort. They are incremented only when Attio returns `data.created` or an outcome/status/operation value that clearly says created or updated.
 

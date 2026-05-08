@@ -26,14 +26,15 @@ Current files:
 - [../cmd/root.go](../cmd/root.go): root command and Cobra error/usage behavior.
 - [../cmd/attio_client.go](../cmd/attio_client.go): command-side authenticated Attio client loading.
 - [../cmd/auth.go](../cmd/auth.go): interactive or stdin token authentication.
+- [../cmd/entries.go](../cmd/entries.go): one-off list-entry add and upsert commands plus list-entry metadata validation/output.
 - [../cmd/objects.go](../cmd/objects.go): object schema discovery commands.
 - [../cmd/lists.go](../cmd/lists.go): list schema discovery commands.
 - [../cmd/match_policy.go](../cmd/match_policy.go): safe default and explicit match policy for record upserts.
 - [../cmd/record_metadata.go](../cmd/record_metadata.go): metadata lookup and local validation for record creates and upserts.
 - [../cmd/records.go](../cmd/records.go): one-off record create and upsert commands.
 - [../cmd/records_import.go](../cmd/records_import.go): CSV import command wiring and plan/apply mode selection.
-- [../cmd/records_import_apply.go](../cmd/records_import_apply.go): CSV import apply execution, row retry behavior, summaries, and table/JSONL output.
-- [../cmd/records_import_errors.go](../cmd/records_import_errors.go): failed-row CSV export.
+- [../cmd/records_import_apply.go](../cmd/records_import_apply.go): CSV import apply execution, row retry behavior, record/list-entry write sequencing, summaries, and table/JSONL output.
+- [../cmd/records_import_errors.go](../cmd/records_import_errors.go): failed-row CSV export with record and list-entry status columns.
 - [../cmd/schema_output.go](../cmd/schema_output.go): table output helpers for schema discovery.
 - [../cmd/value_flags.go](../cmd/value_flags.go): `--set` and `--set-json` parsing for record writes.
 - [../cmd/whoami.go](../cmd/whoami.go): token introspection and optional member display.
@@ -50,10 +51,10 @@ Responsibilities:
 
 - Load CSV files, validate headers, preserve row numbers, and reject malformed input.
 - Build CSV-column to Attio-attribute mapping plans from headers, `--map`, `--ignore`, and static values.
-- Prepare first-pass Attio values from CSV cells using optional object attribute metadata.
-- Build row-by-row plans with validation status, skipped empty cells, warnings, and values.
+- Prepare first-pass Attio record and optional list-entry values from CSV cells using optional metadata.
+- Build row-by-row plans with validation status, skipped empty cells, warnings, record values, and optional list-entry values.
 
-The command layer owns Cobra flags, token/client loading, metadata fallback policy, apply execution, row-scoped rate-limit retries, failed-row CSV export, and table/JSONL output.
+The command layer owns Cobra flags, token/client loading, metadata fallback policy, list parent-object compatibility checks, apply execution, row-scoped rate-limit retries, failed-row CSV export, and table/JSONL output.
 
 ## Auth
 
@@ -79,6 +80,7 @@ Current behavior:
 - Object, list, and attribute discovery used by schema commands.
 - Record create support used by `records create`.
 - Record assert support used by `records upsert`.
+- List-entry create/assert support used by `entries add`, `entries upsert`, and `records import --list`.
 - Object and attribute discovery used by `records import` validation.
 
 Keep endpoint-specific response structs close to the method that uses them until reuse justifies splitting them out.

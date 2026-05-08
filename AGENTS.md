@@ -14,6 +14,8 @@ Current command surface:
 - `atcli objects attributes`
 - `atcli lists list`
 - `atcli lists attributes`
+- `atcli entries add`
+- `atcli entries upsert`
 - `atcli records create`
 - `atcli records upsert`
 - `atcli records import`
@@ -26,7 +28,7 @@ Current command surface:
 - Commands live in [cmd](cmd).
 - Attio REST helpers live in [internal/attio](internal/attio).
 - Auth storage and token introspection live in [internal/auth](internal/auth).
-- CSV import loading, mapping, conversion, and planning live in [internal/importplan](internal/importplan); apply execution and user-facing output live in [cmd](cmd).
+- CSV import loading, mapping, conversion, and planning live in [internal/importplan](internal/importplan); apply execution and user-facing output live in [cmd](cmd). Imports can optionally write list entries after successful record writes.
 - Local binaries should be built into `bin/`; `bin/` is gitignored.
 
 ## Verification Commands
@@ -51,6 +53,9 @@ For command wiring:
 ./bin/atcli lists --help
 ./bin/atcli lists list --help
 ./bin/atcli lists attributes --help
+./bin/atcli entries --help
+./bin/atcli entries add --help
+./bin/atcli entries upsert --help
 ./bin/atcli records --help
 ./bin/atcli records create --help
 ./bin/atcli records upsert --help
@@ -76,6 +81,7 @@ For record write testing, prefer dry runs unless intentionally creating workspac
 ```bash
 ATTIO_ACCESS_TOKEN='token' ./bin/atcli records create companies --set name='Example Co' --set-json 'domains=["example.com"]' --dry-run
 ATTIO_ACCESS_TOKEN='token' ./bin/atcli records upsert companies --match domains --set name='Example Co' --set-json 'domains=["example.com"]' --dry-run
+ATTIO_ACCESS_TOKEN='token' ./bin/atcli entries upsert sales --parent-object people --parent-record-id 'record-id' --set stage='Qualified' --dry-run
 ATTIO_ACCESS_TOKEN='token' ./bin/atcli records import companies ./companies.csv --match domains --output jsonl
 ```
 

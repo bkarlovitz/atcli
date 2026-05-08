@@ -10,7 +10,7 @@ After this sprint, a user can create a single Attio record from shell flags and 
   - Preserve useful API errors for permission, validation, and rate-limit responses without exposing tokens.
   - Validation: `go test ./internal/attio` includes `httptest` coverage for request method/path/body, successful response decode, validation errors, permission errors, and rate-limit status.
 
-- [ ] **Task 2.2**: Add value flag parsing helpers
+- [x] **Task 2.2**: Add value flag parsing helpers
   - Parse repeated `--set attr=value` flags as string values.
   - Parse repeated `--set-json attr=json` flags for arrays, numbers, objects, booleans, and null.
   - Reject malformed flags, empty attribute names, duplicate attribute names across both flag types, and malformed JSON.

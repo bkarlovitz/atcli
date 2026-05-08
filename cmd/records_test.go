@@ -243,6 +243,18 @@ func TestRecordsCreateMissingAuthClassification(t *testing.T) {
 	assertErrorContains(t, err, "ATTIO_ACCESS_TOKEN")
 }
 
+func TestRecordsUpsertMissingAuthClassification(t *testing.T) {
+	t.Setenv("ATTIO_ACCESS_TOKEN", "")
+	keyring.MockInit()
+
+	_, err := executeTestCommand(t, newRecordsCommand(), "upsert", "people", "--set-json", `email_addresses=["ada@example.com"]`)
+	if err == nil {
+		t.Fatal("expected auth error")
+	}
+	assertErrorContains(t, err, "not authenticated")
+	assertErrorContains(t, err, "ATTIO_ACCESS_TOKEN")
+}
+
 func TestRecordsUpsertTableOutputUsesDefaultMatch(t *testing.T) {
 	attioTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

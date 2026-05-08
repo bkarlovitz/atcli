@@ -158,7 +158,7 @@ func runRecordsCreate(cmd *cobra.Command, object string, opts recordsCreateOptio
 
 	record, err := client.CreateRecord(ctx, object, values)
 	if err != nil {
-		return fmt.Errorf("could not create record: %w", err)
+		return classifyRecordWriteError("create record", err)
 	}
 	result.Record = record
 
@@ -232,7 +232,7 @@ func runRecordsUpsert(cmd *cobra.Command, object string, opts recordsUpsertOptio
 
 	assertResult, err := client.AssertRecord(ctx, object, matchAttribute, values)
 	if err != nil {
-		return fmt.Errorf("could not upsert record: %w", err)
+		return classifyRecordWriteError("upsert record", err)
 	}
 	record := assertResult.Record
 	result.Record = &record

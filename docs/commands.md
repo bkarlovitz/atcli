@@ -54,3 +54,97 @@ Expected credential-store failure output:
 ```text
 could not read the OS credential store; unlock it, run `atcli auth`, or set ATTIO_ACCESS_TOKEN
 ```
+
+## `atcli objects list`
+
+Lists Attio objects available to the authenticated workspace.
+
+Behavior:
+
+- Loads `ATTIO_ACCESS_TOKEN` first, then falls back to the OS credential store.
+- Calls Attio's list objects endpoint.
+- Prints the object API slug, object ID, and Attio-provided singular/plural nouns.
+- Does not derive singular or plural names from slugs.
+
+Examples:
+
+```bash
+./bin/atcli objects list
+```
+
+Use object slugs or IDs in later commands. Standard Attio object slugs are usually plural, such as:
+
+```text
+people
+companies
+```
+
+## `atcli objects attributes <object>`
+
+Lists attributes for an Attio object.
+
+Behavior:
+
+- Treats `<object>` as an Attio object slug or ID, not as a noun to singularize or pluralize.
+- Calls Attio's list attributes endpoint with target `objects`.
+- Prints attribute API slug, attribute ID, title, type, writable, editable when returned, required, unique, multiselect, and archived status.
+- Hides archived attributes by default.
+- Includes archived attributes when `--all` is passed.
+
+Examples:
+
+```bash
+./bin/atcli objects attributes people
+./bin/atcli objects attributes companies
+./bin/atcli objects attributes companies --all
+```
+
+## `atcli lists list`
+
+Lists Attio lists available to the authenticated workspace.
+
+Behavior:
+
+- Loads `ATTIO_ACCESS_TOKEN` first, then falls back to the OS credential store.
+- Calls Attio's list lists endpoint.
+- Prints the list API slug, list ID, name, and parent object when available.
+- Keeps list identifiers as Attio slugs or IDs.
+
+Examples:
+
+```bash
+./bin/atcli lists list
+```
+
+## `atcli lists attributes <list>`
+
+Lists attributes for entries in an Attio list.
+
+Behavior:
+
+- Treats `<list>` as an Attio list slug or ID.
+- Calls Attio's list attributes endpoint with target `lists`.
+- Prints list-entry attribute API slug, attribute ID, title, type, writable, editable when returned, required, unique, multiselect, and archived status.
+- Hides archived attributes by default.
+- Includes archived attributes when `--all` is passed.
+
+Examples:
+
+```bash
+./bin/atcli lists attributes hiring-engineering
+./bin/atcli lists attributes hiring-engineering --all
+```
+
+## Schema Planning Workflow
+
+Before creating records or planning CSV imports:
+
+```bash
+./bin/atcli objects list
+./bin/atcli objects attributes people
+./bin/atcli objects attributes companies
+./bin/atcli lists list
+./bin/atcli lists attributes '<list-slug-or-id>'
+```
+
+Use the printed API slugs as CSV headers or later command arguments. Use list-entry attributes only for values that live on list entries; they are separate from the parent record's object attributes.

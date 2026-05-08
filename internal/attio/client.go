@@ -10,18 +10,42 @@ import (
 	"strings"
 )
 
-const baseURL = "https://api.attio.com/v2"
+const defaultBaseURL = "https://api.attio.com/v2"
 
 type Client struct {
 	token      string
 	httpClient *http.Client
+	baseURL    string
 }
 
-func NewClient(token string) *Client {
-	return &Client{
+type ClientOption func(*Client)
+
+func WithBaseURL(baseURL string) ClientOption {
+	return func(c *Client) {
+		if strings.TrimSpace(baseURL) != "" {
+			c.baseURL = strings.TrimRight(baseURL, "/")
+		}
+	}
+}
+
+func WithHTTPClient(httpClient *http.Client) ClientOption {
+	return func(c *Client) {
+		if httpClient != nil {
+			c.httpClient = httpClient
+		}
+	}
+}
+
+func NewClient(token string, opts ...ClientOption) *Client {
+	c := &Client{
 		token:      token,
 		httpClient: http.DefaultClient,
+		baseURL:    defaultBaseURL,
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
 type APIError struct {
@@ -43,7 +67,7 @@ func IsPermissionError(err error) bool {
 }
 
 func (c *Client) getJSON(ctx context.Context, path string, target any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}

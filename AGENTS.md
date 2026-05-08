@@ -10,6 +10,10 @@ Current command surface:
 
 - `atcli auth`
 - `atcli whoami`
+- `atcli objects list`
+- `atcli objects attributes`
+- `atcli lists list`
+- `atcli lists attributes`
 
 ## Fast Context
 
@@ -37,12 +41,26 @@ For command wiring:
 ./bin/atcli --help
 ./bin/atcli auth --help
 ./bin/atcli whoami --help
+./bin/atcli objects --help
+./bin/atcli objects list --help
+./bin/atcli objects attributes --help
+./bin/atcli lists --help
+./bin/atcli lists list --help
+./bin/atcli lists attributes --help
 ```
 
 For live Attio testing, prefer:
 
 ```bash
 ATTIO_ACCESS_TOKEN='token' ./bin/atcli whoami
+```
+
+For live schema discovery testing, prefer read-only commands:
+
+```bash
+ATTIO_ACCESS_TOKEN='token' ./bin/atcli objects list
+ATTIO_ACCESS_TOKEN='token' ./bin/atcli objects attributes people
+ATTIO_ACCESS_TOKEN='token' ./bin/atcli lists list
 ```
 
 Do not print real tokens in logs, docs, tests, or final responses.

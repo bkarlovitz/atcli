@@ -15,10 +15,14 @@ const (
 )
 
 type recordWriteOutput struct {
-	DryRun  bool
-	Object  recordWriteObject
-	Payload map[string]any
-	Record  *attio.Record
+	DryRun         bool
+	Object         recordWriteObject
+	MatchAttribute string
+	MatchDefaulted bool
+	Payload        map[string]any
+	Record         *attio.Record
+	Outcome        string
+	Created        *bool
 }
 
 type recordWriteObject struct {
@@ -34,6 +38,10 @@ func recordCreatePayload(values map[string]any) map[string]any {
 			"values": values,
 		},
 	}
+}
+
+func recordAssertPayload(values map[string]any) map[string]any {
+	return recordCreatePayload(values)
 }
 
 func printRecordWriteOutput(out io.Writer, format string, result recordWriteOutput) error {
@@ -52,6 +60,11 @@ func printRecordWriteTable(out io.Writer, result recordWriteOutput) error {
 		if _, err := fmt.Fprintln(out, "DRY RUN: no write endpoint called"); err != nil {
 			return err
 		}
+		if result.MatchAttribute != "" {
+			if _, err := fmt.Fprintf(out, "Matching attribute: %s\n", result.MatchAttribute); err != nil {
+				return err
+			}
+		}
 		if _, err := fmt.Fprintln(out, "Payload:"); err != nil {
 			return err
 		}
@@ -64,21 +77,42 @@ func printRecordWriteTable(out io.Writer, result recordWriteOutput) error {
 	}
 
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(w, "OBJECT\tOBJECT ID\tRECORD ID\tSINGULAR\tPLURAL\tCREATED AT\tWEB URL"); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(
-		w,
-		"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-		result.Object.Identifier,
-		objectID,
-		recordID,
-		result.Object.SingularNoun,
-		result.Object.PluralNoun,
-		createdAt,
-		webURL,
-	); err != nil {
-		return err
+	if result.MatchAttribute == "" && result.Outcome == "" && result.Created == nil {
+		if _, err := fmt.Fprintln(w, "OBJECT\tOBJECT ID\tRECORD ID\tSINGULAR\tPLURAL\tCREATED AT\tWEB URL"); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(
+			w,
+			"%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			result.Object.Identifier,
+			objectID,
+			recordID,
+			result.Object.SingularNoun,
+			result.Object.PluralNoun,
+			createdAt,
+			webURL,
+		); err != nil {
+			return err
+		}
+	} else {
+		if _, err := fmt.Fprintln(w, "OBJECT\tOBJECT ID\tRECORD ID\tMATCH\tOUTCOME\tSINGULAR\tPLURAL\tCREATED AT\tWEB URL"); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(
+			w,
+			"%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			result.Object.Identifier,
+			objectID,
+			recordID,
+			result.MatchAttribute,
+			recordOutcome(result),
+			result.Object.SingularNoun,
+			result.Object.PluralNoun,
+			createdAt,
+			webURL,
+		); err != nil {
+			return err
+		}
 	}
 	return w.Flush()
 }
@@ -92,6 +126,10 @@ func printRecordWriteJSON(out io.Writer, result recordWriteOutput) error {
 	output := recordWriteJSONOutput{
 		DryRun:              result.DryRun,
 		WriteEndpointCalled: !result.DryRun,
+		MatchAttribute:      result.MatchAttribute,
+		MatchDefaulted:      result.MatchDefaulted,
+		Outcome:             result.Outcome,
+		Created:             result.Created,
 		Object: recordWriteObjectJSON{
 			Identifier:   result.Object.Identifier,
 			ObjectID:     objectID,
@@ -115,6 +153,10 @@ func printRecordWriteJSON(out io.Writer, result recordWriteOutput) error {
 type recordWriteJSONOutput struct {
 	DryRun              bool                   `json:"dry_run"`
 	WriteEndpointCalled bool                   `json:"write_endpoint_called"`
+	MatchAttribute      string                 `json:"match_attribute,omitempty"`
+	MatchDefaulted      bool                   `json:"match_defaulted,omitempty"`
+	Outcome             string                 `json:"outcome,omitempty"`
+	Created             *bool                  `json:"created,omitempty"`
 	Object              recordWriteObjectJSON  `json:"object"`
 	Payload             map[string]any         `json:"payload,omitempty"`
 	Record              *recordWriteRecordJSON `json:"record,omitempty"`
@@ -138,6 +180,19 @@ func recordFields(result recordWriteOutput) (recordID, objectID, createdAt, webU
 		return "", "", "", ""
 	}
 	return result.Record.ID.RecordID, result.Record.ID.ObjectID, result.Record.CreatedAt, result.Record.WebURL
+}
+
+func recordOutcome(result recordWriteOutput) string {
+	if result.Outcome != "" {
+		return result.Outcome
+	}
+	if result.Created == nil {
+		return ""
+	}
+	if *result.Created {
+		return "created"
+	}
+	return "updated"
 }
 
 func writeIndentedJSON(out io.Writer, value any) error {

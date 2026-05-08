@@ -210,3 +210,69 @@ Payload:
   }
 }
 ```
+
+## `atcli records upsert <object>`
+
+Creates or updates one Attio record from shell flags using a unique matching attribute. This is the preferred mental model for rerunnable one-off imports: use upsert when rerunning the same command should update the same record instead of creating duplicates.
+
+Behavior:
+
+- Treats `<object>` as an Attio object slug or ID. It never singularizes or pluralizes the argument.
+- Calls Attio's assert record endpoint with the matching attribute in the `matching_attribute` query parameter.
+- Parses the same repeated `--set attr=value` and `--set-json attr=json` flags as `records create`.
+- Supports `--output table` and `--output json`.
+- Supports `--dry-run`, which fetches metadata when credentials/scopes allow it, validates the payload, prints the exact JSON body that would be sent, and avoids the write endpoint.
+- Requires `--match <attribute>` unless the object slug has a safe default.
+- Uses safe defaults only for exact standard slugs: `companies` -> `domains`, `people` -> `email_addresses`, `users` -> `primary_email_address`, and `workspaces` -> `workspace_id`.
+- Requires explicit `--match` for `deals`, custom objects, object IDs, unknown slugs, and singular/plural variants such as `company` or `person`.
+- When metadata is available, verifies the match attribute exists, is unique, and has a non-null value in the payload.
+- When metadata is blocked by missing `object_configuration:read`, continues only if `--match` was explicit, warns that local validation and match uniqueness validation were skipped, and still attempts the upsert.
+- Normalizes common write failures into actionable errors for missing auth, missing `record_permission:read-write`, validation failures, non-unique matching attributes, rate limits, and network timeouts while preserving Attio status/body details.
+
+Company examples with explicit match:
+
+```bash
+./bin/atcli records upsert companies \
+  --match domains \
+  --set name='Example Co' \
+  --set-json 'domains=["example.com"]'
+
+./bin/atcli records upsert companies \
+  --match domains \
+  --set name='Example Co' \
+  --set-json 'domains=["example.com"]' \
+  --dry-run
+```
+
+People examples with explicit match:
+
+```bash
+./bin/atcli records upsert people \
+  --match email_addresses \
+  --set-json 'email_addresses=["ada@example.com"]' \
+  --set-json 'name=[{"first_name":"Ada","last_name":"Lovelace","full_name":"Ada Lovelace"}]'
+
+./bin/atcli records upsert people \
+  --match email_addresses \
+  --set-json 'email_addresses=["ada@example.com"]' \
+  --set-json 'name=[{"first_name":"Ada","last_name":"Lovelace","full_name":"Ada Lovelace"}]' \
+  --output json
+```
+
+Dry-run output includes the match attribute and the exact write body:
+
+```text
+DRY RUN: no write endpoint called
+Matching attribute: domains
+Payload:
+{
+  "data": {
+    "values": {
+      "domains": [
+        "example.com"
+      ],
+      "name": "Example Co"
+    }
+  }
+}
+```

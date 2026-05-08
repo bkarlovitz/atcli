@@ -15,6 +15,7 @@ Current command surface:
 - `atcli lists list`
 - `atcli lists attributes`
 - `atcli records create`
+- `atcli records upsert`
 
 ## Fast Context
 
@@ -50,6 +51,7 @@ For command wiring:
 ./bin/atcli lists attributes --help
 ./bin/atcli records --help
 ./bin/atcli records create --help
+./bin/atcli records upsert --help
 ```
 
 For live Attio testing, prefer:
@@ -66,10 +68,11 @@ ATTIO_ACCESS_TOKEN='token' ./bin/atcli objects attributes people
 ATTIO_ACCESS_TOKEN='token' ./bin/atcli lists list
 ```
 
-For record create testing, prefer dry runs unless intentionally creating workspace data:
+For record write testing, prefer dry runs unless intentionally creating workspace data:
 
 ```bash
 ATTIO_ACCESS_TOKEN='token' ./bin/atcli records create companies --set name='Example Co' --set-json 'domains=["example.com"]' --dry-run
+ATTIO_ACCESS_TOKEN='token' ./bin/atcli records upsert companies --match domains --set name='Example Co' --set-json 'domains=["example.com"]' --dry-run
 ```
 
 Do not print real tokens in logs, docs, tests, or final responses.

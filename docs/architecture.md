@@ -27,11 +27,13 @@ Current files:
 - [../cmd/auth.go](../cmd/auth.go): interactive or stdin token authentication.
 - [../cmd/objects.go](../cmd/objects.go): object schema discovery commands.
 - [../cmd/lists.go](../cmd/lists.go): list schema discovery commands.
-- [../cmd/record_metadata.go](../cmd/record_metadata.go): metadata lookup and local validation for record creates.
-- [../cmd/records.go](../cmd/records.go): one-off record create command.
+- [../cmd/match_policy.go](../cmd/match_policy.go): safe default and explicit match policy for record upserts.
+- [../cmd/record_metadata.go](../cmd/record_metadata.go): metadata lookup and local validation for record creates and upserts.
+- [../cmd/records.go](../cmd/records.go): one-off record create and upsert commands.
 - [../cmd/schema_output.go](../cmd/schema_output.go): table output helpers for schema discovery.
 - [../cmd/value_flags.go](../cmd/value_flags.go): `--set` and `--set-json` parsing for record writes.
 - [../cmd/whoami.go](../cmd/whoami.go): token introspection and optional member display.
+- [../cmd/write_errors.go](../cmd/write_errors.go): command-facing write error classification.
 - [../cmd/write_output.go](../cmd/write_output.go): table and JSON output helpers for one-off writes.
 
 Commands should stay thin. If a command needs Attio API behavior, add it under `internal/attio`.
@@ -58,5 +60,6 @@ Current behavior:
 - Workspace member lookup used by `whoami`.
 - Object, list, and attribute discovery used by schema commands.
 - Record create support used by `records create`.
+- Record assert support used by `records upsert`.
 
 Keep endpoint-specific response structs close to the method that uses them until reuse justifies splitting them out.

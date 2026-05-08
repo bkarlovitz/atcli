@@ -10,6 +10,7 @@ Primary docs:
 - List all lists: https://docs.attio.com/rest-api/endpoint-reference/lists/list-all-lists
 - List attributes: https://docs.attio.com/rest-api/endpoint-reference/attributes/list-attributes
 - Create a record: https://docs.attio.com/rest-api/endpoint-reference/records/create-a-record
+- Assert a record: https://docs.attio.com/rest-api/endpoint-reference/records/assert-a-record
 - OAuth introspection: https://docs.attio.com/docs/oauth/introspect
 - Get workspace member: https://docs.attio.com/rest-api/endpoint-reference/workspace-members/get-a-workspace-member
 
@@ -238,5 +239,88 @@ Dry-run behavior:
 
 Error behavior:
 
+- Command-facing errors normalize common write failures into actionable messages for missing auth, missing `record_permission:read-write`, validation failures, rate limits, and network timeouts.
 - API error status and response bodies are preserved for validation, permission, and rate-limit responses.
+- The active bearer token is redacted from preserved API error bodies if an upstream response echoes it.
+
+## Record Assert
+
+Endpoint:
+
+```http
+PUT https://api.attio.com/v2/objects/{object}/records?matching_attribute={attribute}
+```
+
+Used by:
+
+- `atcli records upsert <object>` to create or update one record using a unique matching attribute.
+
+Path parameters:
+
+- `object`: Attio object UUID or API slug. atcli passes the user's `<object>` argument through unchanged.
+
+Query parameters:
+
+- `matching_attribute`: Attio attribute UUID or API slug. It must identify a unique attribute on the object.
+
+Required scopes in Attio's docs:
+
+- `record_permission:read-write`
+- `object_configuration:read`
+
+Payload shape:
+
+```json
+{
+  "data": {
+    "values": {
+      "attribute_api_slug_or_id": "value"
+    }
+  }
+}
+```
+
+Command flag mapping:
+
+- `--match attr` sets the `matching_attribute` query parameter.
+- `--set attr=value` adds a string value under `data.values[attr]`.
+- `--set-json attr=json` adds a decoded JSON value under `data.values[attr]`.
+- Duplicate attributes across both value flag types are rejected locally.
+
+Fields currently modeled from successful responses:
+
+- `data.id.workspace_id`
+- `data.id.object_id`
+- `data.id.record_id`
+- `data.created_at`
+- `data.web_url`
+- `data.values`
+- `data.status`, `data.outcome`, or `data.operation` when Attio reports create/update outcome
+- `data.created` when Attio reports a boolean create/update marker
+
+Matching attribute policy:
+
+- `--match` is required unless the object is one of the exact standard Attio slugs with a safe default.
+- Safe defaults are `companies` -> `domains`, `people` -> `email_addresses`, `users` -> `primary_email_address`, and `workspaces` -> `workspace_id`.
+- `deals`, custom objects, object IDs, unknown slugs, and singular/plural variants require explicit `--match`.
+- atcli does not infer defaults from singularized or pluralized object names.
+
+Metadata behavior before upserts:
+
+- atcli tries to call `GET /objects` and `GET /objects/{object}/attributes` before upserts, including dry runs when credentials are available.
+- When metadata is available, output uses Attio's returned nouns, value attributes are checked against returned `api_slug` or `id.attribute_id`, and the match attribute must exist, be unique, and have a non-null payload value.
+- If metadata calls fail with a permission error, atcli continues only when `--match` was explicit, warns that local validation and match uniqueness validation were skipped, then attempts the assert request.
+- If metadata calls fail with a permission error while the match attribute came from a safe default, atcli stops and asks for explicit `--match`.
+- Non-permission metadata errors stop the command before the write.
+
+Dry-run behavior:
+
+- `--dry-run` prints the exact JSON payload body atcli would send to the assert endpoint and reports the match attribute separately.
+- It marks `write_endpoint_called` as false in JSON output or prints `DRY RUN: no write endpoint called` in table output.
+- It fetches metadata when credentials/scopes allow it and never calls the assert write endpoint.
+
+Error behavior:
+
+- Command-facing errors normalize missing auth, missing `record_permission:read-write`, validation failures, non-unique matching attributes, rate limits, and network timeouts.
+- API error status and response bodies remain wrapped in the returned error for debugging.
 - The active bearer token is redacted from preserved API error bodies if an upstream response echoes it.

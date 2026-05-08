@@ -22,7 +22,7 @@ After this sprint, a user can create a single Attio record from shell flags and 
   - For successful writes, include record ID and object metadata when available.
   - Validation: unit tests cover table output, JSON output, dry-run output, and missing optional metadata.
 
-- [ ] **Task 2.4**: Implement `records create <object>`
+- [x] **Task 2.4**: Implement `records create <object>`
   - Add a `records` command group and `records create <object>`.
   - Treat `<object>` as an Attio object slug or ID, usually plural for standard objects such as `people` and `companies`.
   - Use Attio-provided `singular_noun` and `plural_noun` for display when metadata is available; never singularize or pluralize the object argument.

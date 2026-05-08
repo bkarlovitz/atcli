@@ -18,7 +18,7 @@ After this sprint, a user can point the CLI at an agent-produced CSV and see a v
   - Reject mappings for missing CSV columns, duplicate target attributes, ignored columns that are also mapped, and static values that conflict with mapped attributes.
   - Validation: unit tests cover default mapping, explicit mapping, ignored columns, static values, and every conflict case.
 
-- [ ] **Task 4.3**: Add first-pass attribute-aware CSV value preparation
+- [x] **Task 4.3**: Add first-pass attribute-aware CSV value preparation
   - Empty cells omit values by default and do not clear existing Attio values.
   - Support string passthrough for text-like attributes, names, email addresses, domains, phone numbers, select/status option titles, and relationship-like values when no richer conversion is available.
   - Support number parsing, checkbox parsing, ISO date parsing, and RFC3339 timestamp parsing.
